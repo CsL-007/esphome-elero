@@ -55,26 +55,25 @@ The codebase uses Mongoose for HTTP/WebSocket specifically because it provides a
 
 5. **Clear, unidirectional data flow.** Hardware → RF Task (Core 0) → FreeRTOS Queues → Main Loop (Core 1) → Registry → Adapters. Commands flow reverse via `tx_queue`. No shared mutable state between cores.
 
-### Three Operating Modes
+### Two Operating Modes
 
-All modes use the same `Device` struct and `DeviceRegistry` — only output adapters differ.
+Devices always live in NVS (RFC-002). The two modes only differ in how those devices are surfaced to Home Assistant.
 
-| | Native Mode | MQTT Mode | Native+NVS Mode |
-|---|---|---|---|
-| **Devices defined in** | YAML (compile-time) | NVS (runtime via CRUD API) | NVS (runtime, reboot to apply) |
-| **Home Assistant API** | ESPHome native API | MQTT HA discovery | ESPHome native API |
-| **Component** | `elero:` only | `elero:` + `elero_mqtt:` | `elero:` + `elero_nvs:` |
-| **Output adapters** | `EspCoverShell`, `EspLightShell` | `MqttAdapter` | `EspCoverShell`, `EspLightShell` |
+| | Native API Mode | MQTT Mode |
+|---|---|---|
+| **Devices defined in** | NVS (web UI / `import_config`) | NVS (web UI / `import_config`) |
+| **Home Assistant** | ESPHome native API | MQTT HA discovery |
+| **Component combo** | `elero:` + `elero_nvs:` | `elero:` + `elero_mqtt:` |
+| **Output adapter** | `EspCoverShell`/`EspLightShell` (created by `NvsAdapter`) | `MqttAdapter` |
+| **CRUD apply latency** | Reboot needed (ESPHome can't add entities at runtime) | Immediate (HA discovery topic) |
+
+Backup/restore (`export_config` / `import_config`) is the supported recovery path for chip-swap or reproducible deployments.
 
 ### Critical Architectural Guardrails
 
-**EleroWebServer is a STATELESS pipe.** It does NOT:
-- Track which blinds are discovered (client derives from RF packets)
-- Store blind states (client derives from RF status events)
-- Generate YAML (client does this)
-- Know anything about "discovery mode" (client filters RF packets)
+**EleroWebServer is a STATELESS pipe** for live data. It does NOT track which blinds are discovered or cache blind states (client derives from RF events). It DOES proxy CRUD: `upsert_device`, `remove_device`, `set_hub_config`, `export_config`, `import_config`.
 
-**Client derives EVERYTHING** from `config` + `rf` + `log` events over WebSocket. Discovery = RF addresses NOT in config. Position = derived from movement timing. YAML generation = client-side.
+**Client derives live state** from `config` + `rf` + `state_changed` events. Discovery = RF addresses not yet persisted. Position = derived from movement timing.
 
 **DeviceRegistry is the single source of truth.** All adapters (native shell, MQTT, WebSocket) route commands through `DeviceRegistry::command_cover()` / `command_light()` — no duplicated FSM logic.
 
@@ -131,7 +130,7 @@ cv.GenerateID(CONF_ELERO_ID): cv.use_id(elero),
 
 ## Configuration & Testing
 
-**Configuration reference:** `docs/CONFIGURATION.md` (German, complete parameter tables for all platforms and modes). See also `example.yaml`.
+**Configuration reference:** `docs/CONFIGURATION.md` (complete parameter tables). Migration from older versions: `docs/MIGRATION-yaml-to-nvs.md`. See also `example.yaml`.
 
 **Unit tests:**
 ```bash
@@ -140,9 +139,14 @@ cd tests/unit && cmake -B build && cmake --build build && ctest --test-dir build
 
 **Compile tests:**
 ```bash
-uv run esphome compile tests/test.esp32-minimal.yaml   # Native mode
+uv run esphome compile tests/test.esp32-minimal.yaml   # Bare hub via common.yaml (NVS mode)
 uv run esphome compile tests/test.esp32-mqtt.yaml       # MQTT mode
-uv run esphome compile tests/test.esp32-nvs.yaml        # Native+NVS mode
+uv run esphome compile tests/test.esp32-nvs.yaml        # Native API + NVS mode
+```
+
+**Python tests:**
+```bash
+uv run pytest tests/python/                             # config validation + migration script
 ```
 
 ---

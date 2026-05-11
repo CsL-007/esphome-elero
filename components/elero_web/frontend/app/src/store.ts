@@ -159,7 +159,7 @@ export const devices = signal<Map<string, Device>>(new Map())
 
 export const rfPackets = signal<RfPacketWithTimestamp[]>([])
 
-/// True when NVS config has changed and a reboot is needed to apply in HA (native_nvs mode)
+/// True when NVS config has changed and a reboot is needed to apply in HA (native mode)
 export const rebootNeeded = signal(false)
 
 export type StatusFilter = 'all' | 'saved' | 'unsaved'
@@ -386,7 +386,7 @@ export function onDeviceUpserted(data: DeviceUpsertedData) {
 
   devices.value = next
 
-  if (hub.value.mode === 'native_nvs') {
+  if (hub.value.mode === 'native') {
     rebootNeeded.value = true
   }
 }
@@ -481,7 +481,7 @@ export function onDeviceRemoved({ address }: CrudEventData) {
   next.delete(address)
   devices.value = next
 
-  if (hub.value.mode === 'native_nvs') {
+  if (hub.value.mode === 'native') {
     rebootNeeded.value = true
   }
 }

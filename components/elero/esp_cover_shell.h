@@ -2,8 +2,8 @@
 /// @brief Thin ESPHome cover::Cover adapter — delegates all state to the Device model.
 ///
 /// Owns NO cover state. Reads position/operation from the cover state machine.
-/// During setup(), registers the YAML-defined device with the DeviceRegistry.
-/// During loop(), publishes state when the device's notify timestamp changes.
+/// Constructed by `NvsAdapter` at boot from a pre-restored DeviceRegistry slot.
+/// Devices are no longer YAML-defined (RFC-002) — they live in NVS.
 
 #pragma once
 
@@ -37,19 +37,15 @@ class EspCoverShell : public cover::Cover, public Component {
  public:
   float get_setup_priority() const override { return setup_priority::DATA - 1.0f; }
 
-  // ── Config setters (called by Python codegen) ──────────────
+  // ── Setup (called by NvsAdapter when binding to a registry slot) ──
   void set_registry(DeviceRegistry *r) { registry_ = r; }
-  void set_slot_index(int idx) { slot_index_ = idx; }  ///< NVS mode: bind to pre-restored slot
-  void set_dst_address(uint32_t v) { cfg_.dst_address = v; }
-  void set_src_address(uint32_t v) { cfg_.src_address = v; }
-  void set_channel(uint8_t v) { cfg_.channel = v; }
-  void set_hop(uint8_t v) { cfg_.hop = v; }
-  void set_payload_1(uint8_t v) { cfg_.payload_1 = v; }
-  void set_payload_2(uint8_t v) { cfg_.payload_2 = v; }
-  void set_type(uint8_t v) { cfg_.type_byte = v; }
-  void set_type2(uint8_t v) { cfg_.type2 = v; }
-  void set_supports_tilt(bool v) { cfg_.supports_tilt = v ? 1 : 0; }
-  void set_ha_device_class(uint8_t v) { cfg_.ha_device_class = v; }
+  void set_slot_index(int idx) { slot_index_ = idx; }
+  // The following pre-seed get_traits() fallbacks for the brief window
+  // between construction and setup() binding the registry slot. After
+  // setup() runs, traits read directly from device_->config.
+  void set_supports_tilt(bool v) { trait_hints_.supports_tilt = v ? 1 : 0; }
+  void set_open_duration(uint32_t v) { trait_hints_.open_duration_ms = v; }
+  void set_close_duration(uint32_t v) { trait_hints_.close_duration_ms = v; }
 
   // ── Sensor setters (all published from sync_and_publish_ via snapshot) ──
 #ifdef USE_SENSOR
@@ -67,21 +63,10 @@ class EspCoverShell : public cover::Cover, public Component {
   void set_refresh_button(RefreshButton *b) { refresh_button_ = b; }
 #endif
 
-  void set_open_duration(uint32_t v) { cfg_.open_duration_ms = v; }
-  void set_close_duration(uint32_t v) { cfg_.close_duration_ms = v; }
-
   // ── ESPHome Component lifecycle ────────────────────────────
   void setup() override {
-    if (!registry_) return;
-    if (slot_index_ >= 0) {
-      // NVS mode: bind to pre-restored registry slot
-      device_ = registry_->slot(static_cast<size_t>(slot_index_));
-    } else {
-      // Native mode: register device from YAML config
-      cfg_.type = DeviceType::COVER;
-      cfg_.set_name(this->get_name().c_str());
-      device_ = registry_->register_device(cfg_);
-    }
+    if (!registry_ || slot_index_ < 0) return;
+    device_ = registry_->slot(static_cast<size_t>(slot_index_));
 #ifdef USE_BUTTON
     if (refresh_button_ && device_) {
       refresh_button_->set_device(device_);
@@ -107,8 +92,10 @@ class EspCoverShell : public cover::Cover, public Component {
   // ── ESPHome Cover interface ────────────────────────────────
   cover::CoverTraits get_traits() override {
     auto traits = cover::CoverTraits();
-    // Use device config when bound (NVS mode), fall back to local cfg_ (native mode)
-    const auto &cfg = (device_ && device_->active) ? device_->config : cfg_;
+    // After setup() binds the slot, prefer the registry's authoritative config.
+    // Before binding (very early in boot) fall back to the trait hints supplied
+    // at construction time by NvsAdapter.
+    const auto &cfg = (device_ && device_->active) ? device_->config : trait_hints_;
     auto ctx = cover_context(cfg);
     traits.set_supports_position(cover_sm::has_position_tracking(ctx));
     traits.set_supports_tilt(cfg.supports_tilt != 0);
@@ -204,11 +191,11 @@ class EspCoverShell : public cover::Cover, public Component {
 #endif
   }
 
-  NvsDeviceConfig cfg_{};
+  NvsDeviceConfig trait_hints_{};       ///< Pre-binding fallback for get_traits()
   DeviceRegistry *registry_{nullptr};
   Device *device_{nullptr};
   uint32_t last_published_ms_{0};
-  int slot_index_{-1};  ///< -1 = native mode (use cfg_), >=0 = NVS mode (bind to registry slot)
+  int slot_index_{-1};                  ///< Required: NVS slot bound in setup()
   bool initial_published_{false};
 
 #ifdef USE_SENSOR

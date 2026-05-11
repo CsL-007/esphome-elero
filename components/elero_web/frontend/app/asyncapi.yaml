@@ -2,7 +2,7 @@ asyncapi: 3.0.0
 
 info:
   title: Elero WebSocket API
-  version: 1.1.0
+  version: 2.0.0
   description: |
     Real-time WebSocket interface for the esphome-elero gateway.
 
@@ -29,12 +29,11 @@ info:
     ## Operating Modes
 
     The `mode` field in the `config` event indicates the operating mode:
-    - `native` — devices defined in YAML (read-only, no CRUD)
-    - `mqtt` — devices stored in NVS, managed via MQTT HA discovery
-    - `native_nvs` — devices stored in NVS, managed via ESPHome native API
+    - `native` — devices stored in NVS, surfaced via ESPHome native API
+    - `mqtt`   — devices stored in NVS, surfaced via MQTT HA discovery
 
-    CRUD operations (`upsert_device`, `remove_device`) are only available
-    when `crud` is `true` in the config event (mqtt and native_nvs modes).
+    CRUD operations (`upsert_device`, `remove_device`, `import_config`) are
+    always available — every mode persists devices in NVS.
 
 servers:
   device:
@@ -1339,8 +1338,12 @@ components:
 
     HubMode:
       type: string
-      enum: [native, mqtt, native_nvs]
-      description: Operating mode of the hub
+      enum: [native, mqtt]
+      description: |
+        Operating mode of the hub. Devices always live in NVS (RFC-002);
+        the mode only selects how they're surfaced to Home Assistant:
+          - `native` — ESPHome native API (NvsAdapter creates entities at boot)
+          - `mqtt`   — MQTT HA discovery (MqttAdapter publishes topics)
 
     DeviceAction:
       type: string

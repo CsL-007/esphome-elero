@@ -30,7 +30,7 @@ async def to_code(config):
     # If elero_mqtt is loaded, it handles entity publishing via MQTT discovery.
     # Otherwise, create an NVS adapter that builds ESPHome entities from NVS at boot.
     if "elero_mqtt" not in CORE.loaded_integrations:
-        cg.add(registry.set_hub_mode(cg.RawExpression("elero::HubMode::NATIVE_NVS")))
+        cg.add(registry.set_hub_mode(cg.RawExpression("elero::HubMode::NATIVE")))
 
         # Ensure cover/light framework is enabled — normally set by ESPHome when
         # YAML cover:/light: blocks exist, but NVS mode creates entities at runtime.

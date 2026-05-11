@@ -124,39 +124,6 @@ void DeviceRegistry::setup_adapters() {
 // CRUD
 // ═════════════════════════════════════════════════════════════════════════════
 
-Device *DeviceRegistry::register_device(const NvsDeviceConfig &config) {
-    if (nvs_enabled_) {
-        ESP_LOGW(TAG, "Ignoring YAML-defined %s '%s' at 0x%06x — NVS mode is active, "
-                       "devices are managed at runtime via the web UI or MQTT. "
-                       "Remove cover/light blocks from YAML or disable elero_mqtt/elero_nvs.",
-                 device_type_str(config.type), config.name, config.dst_address);
-        return nullptr;
-    }
-
-    Device *existing = find(config.dst_address, config.type);
-    if (existing) {
-        update_device_config(*existing, config);
-        notify_config_changed_(*existing);
-        return existing;
-    }
-
-    Device *slot = find_free_slot_();
-    if (!slot) {
-        ESP_LOGE(TAG, "No free slot for %s at 0x%06x",
-                 device_type_str(config.type), config.dst_address);
-        return nullptr;
-    }
-
-    init_device(*slot, config);
-    if (config.type == DeviceType::COVER) assign_poll_stagger_();
-    notify_added_(*slot);
-    notify_state_changed_(*slot, millis());
-    ESP_LOGI(TAG, "Registered %s '%s' at 0x%06x (slot %zu)",
-             device_type_str(config.type), config.name,
-             config.dst_address, slot_index_(*slot));
-    return slot;
-}
-
 Device *DeviceRegistry::upsert(const NvsDeviceConfig &config) {
     // Try to find existing device with same address+type
     Device *existing = find(config.dst_address, config.type);
@@ -512,9 +479,6 @@ void DeviceRegistry::dispatch_status_(Device &dev, uint8_t state_byte, uint32_t 
 
 
 void DeviceRegistry::track_remote_(const RfPacketInfo &pkt, uint32_t now) {
-    // Native mode doesn't auto-discover remotes — devices are YAML-defined
-    if (!nvs_enabled_) return;
-
     // Check if we already track this remote (active, any enabled state)
     Device *existing = find(pkt.src, DeviceType::REMOTE);
     if (existing) {

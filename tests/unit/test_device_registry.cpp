@@ -221,11 +221,11 @@ class DeviceRegistryTest : public ::testing::Test {
     }
 
     Device *add_cover(uint32_t addr = 0xA831E5) {
-        return registry_.register_device(make_cover_config(addr));
+        return registry_.upsert(make_cover_config(addr));
     }
 
     Device *add_light(uint32_t addr = 0xC41A2B) {
-        return registry_.register_device(make_light_config(addr));
+        return registry_.upsert(make_light_config(addr));
     }
 };
 
@@ -233,10 +233,11 @@ class DeviceRegistryTest : public ::testing::Test {
 // CRUD — only non-trivial paths
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_F(DeviceRegistryTest, RegisterDuplicate_UpdatesConfigInPlace) {
+TEST_F(DeviceRegistryTest, UpsertDuplicate_UpdatesConfigInPlace) {
     auto *dev1 = add_cover(0xA831E5);
+    adapter_.clear();
     auto cfg2 = make_cover_config(0xA831E5, "Updated Cover");
-    auto *dev2 = registry_.register_device(cfg2);
+    auto *dev2 = registry_.upsert(cfg2);
     EXPECT_EQ(dev1, dev2);  // Same slot, not a new allocation
     EXPECT_STREQ(dev2->config.name, "Updated Cover");
     EXPECT_EQ(registry_.count_active(), 1u);
@@ -255,15 +256,9 @@ TEST_F(DeviceRegistryTest, Remove_NotifiesBeforeDeactivation) {
 
 TEST_F(DeviceRegistryTest, SlotExhaustion_ReturnsNull) {
     for (uint32_t i = 0; i < DeviceRegistry::MAX_DEVICES; ++i) {
-        ASSERT_NE(registry_.register_device(make_cover_config(0x100000 + i)), nullptr);
+        ASSERT_NE(registry_.upsert(make_cover_config(0x100000 + i)), nullptr);
     }
-    EXPECT_EQ(registry_.register_device(make_cover_config(0xFFFFFF)), nullptr);
-}
-
-TEST_F(DeviceRegistryTest, RegisterDevice_RejectsWhenNvsEnabled) {
-    registry_.set_nvs_enabled(true);
-    EXPECT_EQ(registry_.register_device(make_cover_config(0xA831E5)), nullptr);
-    EXPECT_EQ(registry_.count_active(), 0u);
+    EXPECT_EQ(registry_.upsert(make_cover_config(0xFFFFFF)), nullptr);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -374,7 +369,7 @@ TEST_F(DeviceRegistryTest, SetPosition_NoDurations_Rejected) {
     auto cfg = make_cover_config(0xA831E5);
     cfg.open_duration_ms = 0;
     cfg.close_duration_ms = 0;
-    auto *dev = registry_.register_device(cfg);
+    auto *dev = registry_.upsert(cfg);
     adapter_.clear();
 
     registry_.set_cover_position(*dev, 0.5f);
@@ -419,7 +414,7 @@ TEST_F(DeviceRegistryTest, SetBrightness_PartialStartsDimming) {
 TEST_F(DeviceRegistryTest, SetBrightness_NoDimSupport_InstantOn) {
     auto cfg = make_light_config(0xC41A2B);
     cfg.dim_duration_ms = 0;
-    auto *dev = registry_.register_device(cfg);
+    auto *dev = registry_.upsert(cfg);
 
     registry_.set_light_brightness(*dev, 0.5f);
 
@@ -512,16 +507,6 @@ TEST_F(DeviceRegistryTest, RfCommand_DiscoversRemoteEphemerally) {
     ASSERT_NE(remote, nullptr);
     // Ephemeral until user saves — updated_at stays 0 so MQTT adapter skips it
     EXPECT_EQ(remote->config.updated_at, 0u);
-}
-
-TEST_F(DeviceRegistryTest, RfCommand_NativeMode_NoDiscovery) {
-    // NVS disabled = native mode = devices come from YAML only
-    add_cover(0xA831E5);
-    adapter_.clear();
-
-    registry_.on_rf_packet(make_command_pkt(0xBBBBBB, 0xA831E5, pkt::command::UP),
-                           mock_time_.millis());
-    EXPECT_EQ(registry_.find(0xBBBBBB, DeviceType::REMOTE), nullptr);
 }
 
 TEST_F(DeviceRegistryTest, RfCommand_UpdatesExistingRemote) {
@@ -825,8 +810,8 @@ static NvsDeviceConfig make_cover_config_ch(uint32_t addr, uint8_t channel,
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_TwoCovers_EnqueuesAndNotifies) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
     ASSERT_NE(dev1, nullptr);
     ASSERT_NE(dev2, nullptr);
     adapter_.clear();
@@ -845,8 +830,8 @@ TEST_F(DeviceRegistryTest, CommandGroup_TwoCovers_EnqueuesAndNotifies) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_UpdatesFSMs) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
     adapter_.clear();
 
     Device *devs[] = {dev1, dev2};
@@ -862,8 +847,8 @@ TEST_F(DeviceRegistryTest, CommandGroup_UpdatesFSMs) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_StopClearsTarget) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
 
     // First start movement
     Device *devs[] = {dev1, dev2};
@@ -880,8 +865,8 @@ TEST_F(DeviceRegistryTest, CommandGroup_StopClearsTarget) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_SetsGroupFieldsOnLeadSender) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
 
     Device *devs[] = {dev1, dev2};
     registry_.command_group(devs, 2, pkt::command::UP);
@@ -939,7 +924,7 @@ TEST_F(DeviceRegistryTest, CommandGroup_NumDestsAutoCleared) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_RejectsCountBelow2) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
     adapter_.clear();
 
     Device *devs[] = {dev1};
@@ -956,8 +941,8 @@ TEST_F(DeviceRegistryTest, CommandGroup_RejectsNullDevices) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_RejectsMixedSrcAddress) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1, 0xF0D008));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3, 0xDEAD00));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1, 0xF0D008));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3, 0xDEAD00));
     adapter_.clear();
 
     Device *devs[] = {dev1, dev2};
@@ -968,7 +953,7 @@ TEST_F(DeviceRegistryTest, CommandGroup_RejectsMixedSrcAddress) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_RejectsLightDevice) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
     auto *dev2 = add_light(0xC41A2B);
     adapter_.clear();
 
@@ -980,8 +965,8 @@ TEST_F(DeviceRegistryTest, CommandGroup_RejectsLightDevice) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_TracksCommandSource) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
 
     Device *devs[] = {dev1, dev2};
     registry_.command_group(devs, 2, pkt::command::UP, CommandSource::REMOTE);

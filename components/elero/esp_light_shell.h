@@ -31,20 +31,12 @@ class EspLightShell : public light::LightOutput, public Component {
  public:
   float get_setup_priority() const override { return setup_priority::DATA - 1.0f; }
 
-  // ── Config setters (called by Python codegen) ──────────────
+  // ── Setup (called by NvsAdapter when binding to a registry slot) ──
   void set_registry(DeviceRegistry *r) { registry_ = r; }
-  void set_dst_address(uint32_t v) { cfg_.dst_address = v; }
-  void set_src_address(uint32_t v) { cfg_.src_address = v; }
-  void set_channel(uint8_t v) { cfg_.channel = v; }
-  void set_hop(uint8_t v) { cfg_.hop = v; }
-  void set_payload_1(uint8_t v) { cfg_.payload_1 = v; }
-  void set_payload_2(uint8_t v) { cfg_.payload_2 = v; }
-  void set_type(uint8_t v) { cfg_.type_byte = v; }
-  void set_type2(uint8_t v) { cfg_.type2 = v; }
-  void set_dim_duration(uint32_t v) { cfg_.dim_duration_ms = v; }
+  void set_slot_index(int idx) { slot_index_ = idx; }
   void set_light_state(light::LightState *s) { light_state_ = s; }
-  void set_device_name(const char *n) { cfg_.set_name(n); }
-  void set_slot_index(int idx) { slot_index_ = idx; }  ///< NVS mode: bind to pre-restored slot
+  // Pre-seeds get_traits() until setup() binds the registry slot.
+  void set_dim_duration(uint32_t v) { trait_hints_.dim_duration_ms = v; }
 
   // ── Sensor setters (published from sync_and_publish_ via snapshot) ──
 #ifdef USE_SENSOR
@@ -59,15 +51,8 @@ class EspLightShell : public light::LightOutput, public Component {
 
   // ── ESPHome Component lifecycle ────────────────────────────
   void setup() override {
-    if (!registry_) return;
-    if (slot_index_ >= 0) {
-      // NVS mode: bind to pre-restored registry slot
-      device_ = registry_->slot(static_cast<size_t>(slot_index_));
-    } else {
-      // Native mode: register device from config
-      cfg_.type = DeviceType::LIGHT;
-      device_ = registry_->register_device(cfg_);
-    }
+    if (!registry_ || slot_index_ < 0) return;
+    device_ = registry_->slot(static_cast<size_t>(slot_index_));
 #ifdef USE_BUTTON
     if (refresh_button_ && device_) {
       refresh_button_->set_device(device_);
@@ -89,8 +74,9 @@ class EspLightShell : public light::LightOutput, public Component {
   // ── ESPHome Light interface ────────────────────────────────
   light::LightTraits get_traits() override {
     auto traits = light::LightTraits();
-    // Use device config when bound (NVS mode), fall back to local cfg_ (native mode)
-    const auto &cfg = (device_ && device_->active) ? device_->config : cfg_;
+    // Prefer the registry slot once bound; fall back to the construction-time
+    // hints from NvsAdapter for the brief pre-setup() window.
+    const auto &cfg = (device_ && device_->active) ? device_->config : trait_hints_;
     auto ctx = light_context(cfg);
     traits.set_supported_color_modes({
         light_sm::supports_brightness(ctx)
@@ -141,13 +127,13 @@ class EspLightShell : public light::LightOutput, public Component {
 #endif
   }
 
-  NvsDeviceConfig cfg_{};
+  NvsDeviceConfig trait_hints_{};
   DeviceRegistry *registry_{nullptr};
   Device *device_{nullptr};
   light::LightState *light_state_{nullptr};
   uint32_t last_published_ms_{0};
   bool ignore_write_state_{false};
-  int slot_index_{-1};  ///< -1 = native mode, >=0 = NVS mode
+  int slot_index_{-1};                  ///< Required: NVS slot bound in setup()
 
 #ifdef USE_SENSOR
   sensor::Sensor *rssi_sensor_{nullptr};

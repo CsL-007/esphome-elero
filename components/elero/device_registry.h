@@ -66,10 +66,6 @@ class DeviceRegistry {
     /// Returns pointer to the device slot, or nullptr if no free slot.
     Device *upsert(const NvsDeviceConfig &config);
 
-    /// Add a device without NVS persistence (for YAML-defined devices).
-    /// Source of truth is YAML, not NVS.
-    Device *register_device(const NvsDeviceConfig &config);
-
     /// Remove a device by address and type. Returns true if found and removed.
     bool remove(uint32_t address, DeviceType type);
 
