@@ -68,6 +68,8 @@ If you're upgrading from a version where devices were defined under `cover: - pl
 
 - [Configuration Reference](docs/CONFIGURATION.md) -- full parameter tables for all modes
 - [Installation Guide](docs/INSTALLATION.md) -- step-by-step hardware setup
+- [Backup &amp; Restore](docs/BACKUP-RESTORE.md) -- exporting/importing your NVS device list
+- [Migration from YAML devices](docs/MIGRATION-yaml-to-nvs.md) -- upgrading from pre-0.11.0
 - [Device Configs](docs/devices/) -- board-specific wiring and config
 - [example.yaml](example.yaml) -- minimal working config
 

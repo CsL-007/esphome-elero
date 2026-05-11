@@ -32,9 +32,10 @@ async def to_code(config):
     if "elero_mqtt" not in CORE.loaded_integrations:
         cg.add(registry.set_hub_mode(cg.RawExpression("elero::HubMode::NATIVE")))
 
-        # Ensure cover/light framework is enabled — normally set by ESPHome when
-        # YAML cover:/light: blocks exist, but NVS mode creates entities at runtime.
-        # Entity counts are set to MAX_DEVICES since the actual count isn't known at codegen.
+        # Ensure cover/light framework is enabled — ESPHome normally sets these
+        # defines when it sees a `cover:`/`light:` block in YAML, but here entities
+        # are created at runtime from NVS. Counts are pre-sized to MAX_DEVICES
+        # since the actual count isn't known at codegen.
         cg.add_define("USE_COVER")
         cg.add_define("USE_LIGHT")
         cg.add_define("ESPHOME_ENTITY_COVER_COUNT", 48)

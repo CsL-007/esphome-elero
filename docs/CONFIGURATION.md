@@ -275,4 +275,4 @@ switch:
 
 After flashing, open `http://<device-ip>/elero` to add devices.
 
-See also: [Installation Guide](INSTALLATION.md) | [Migration from YAML](MIGRATION-yaml-to-nvs.md) | [README](../README.md) | [Example YAML](../example.yaml)
+See also: [Installation Guide](INSTALLATION.md) | [Backup &amp; Restore](BACKUP-RESTORE.md) | [Migration from YAML](MIGRATION-yaml-to-nvs.md) | [README](../README.md) | [Example YAML](../example.yaml)

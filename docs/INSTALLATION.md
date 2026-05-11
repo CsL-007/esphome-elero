@@ -327,6 +327,7 @@ To migrate from older versions where blinds were defined in YAML, see [`MIGRATIO
 ## Next Steps
 
 - [Configuration Reference](CONFIGURATION.md) - YAML parameters in detail
+- [Backup &amp; Restore](BACKUP-RESTORE.md) - Save your device list, restore after a chip swap
 - [Migration from YAML](MIGRATION-yaml-to-nvs.md) - Upgrade from pre-0.11.0
 - [Example Configurations](examples/) - Templates for various scenarios
 - [README](../README.md) - Overview and troubleshooting
