@@ -325,6 +325,7 @@ void EleroWebServer::handle_ws_message(struct mg_connection *c, struct mg_ws_mes
 
     if (type == "upsert_device") { this->handle_upsert_device_(c, root); return true; }
     if (type == "remove_device") { this->handle_remove_device_(c, root); return true; }
+    if (type == "set_hub_config") { this->handle_set_hub_config_(c, root); return true; }
     if (type == "restart") { App.safe_reboot(); return true; }
 
     if (type == "raw") {
@@ -410,6 +411,9 @@ std::string EleroWebServer::build_config_json() {
     hub["version"] = this->parent_->get_version();
     hub["mode"] = registry ? hub_mode_str(registry->hub_mode()) : "native";
     hub["crud"] = has_nvs;
+    // Assign std::string by value — ArduinoJson copies, so we don't depend on
+    // the registry's std::string outliving the document.
+    hub["name"] = registry ? registry->hub_display_name() : App.get_name();
 
     // radio — RF hardware configuration and capabilities
     auto *drv = this->parent_->get_driver();
@@ -641,6 +645,24 @@ void EleroWebServer::handle_remove_device_(struct mg_connection *c, JsonObject r
   if (!registry->remove(addr, type)) {
     this->ws_send(c, "error", "{\"msg\":\"Failed to remove device\"}");
   }
+}
+
+void EleroWebServer::handle_set_hub_config_(struct mg_connection *c, JsonObject root) {
+  auto *registry = this->parent_->get_registry();
+  if (registry == nullptr) {
+    this->ws_send(c, "error", "{\"msg\":\"Registry unavailable\"}");
+    return;
+  }
+  // `name`: empty/missing clears the override and falls back to the YAML default.
+  const char *name = root["name"] | "";
+  registry->set_hub_name_override(name);
+
+  // Broadcast updated config to all clients so frontends refresh.
+  // Capture the name by value to keep the JSON build pure of registry lifetime.
+  std::string display_name = registry->hub_display_name();
+  this->ws_broadcast("hub_config", json::build_json([&display_name](JsonObject r) {
+    r["name"] = display_name;
+  }));
 }
 
 }  // namespace elero

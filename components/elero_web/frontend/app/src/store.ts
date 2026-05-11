@@ -1,7 +1,7 @@
 import { signal, computed, batch } from '@preact/signals'
 import type {
   ConfigData, RfData, DeviceType, CrudEventData, DeviceUpsertedData,
-  StateChangedData, FreqConfig, HubMode, HubConfig, RadioConfig,
+  StateChangedData, FreqConfig, HubMode, HubConfig, HubConfigEventData, RadioConfig,
   BlindConfig, LightConfig, RemoteConfig,
   RfStateName,
 } from '@/generated'
@@ -145,6 +145,7 @@ export const hub = signal<HubConfig>({
   version: '',
   mode: 'native',
   crud: false,
+  name: '',
 })
 
 export const radio = signal<RadioConfig>({
@@ -407,6 +408,10 @@ export function onStateChanged(data: StateChangedData) {
 
   next.set(data.address, { ...existing, lastStatus })
   devices.value = next
+}
+
+export function onHubConfig(data: HubConfigEventData) {
+  hub.value = { ...hub.value, name: data.name }
 }
 
 export function onDeviceRemoved({ address }: CrudEventData) {

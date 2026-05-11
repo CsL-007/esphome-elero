@@ -39,6 +39,11 @@ void MqttAdapter::setup(DeviceRegistry &registry) {
     ctx_.mqtt = &mqtt_adapter_;
     ctx_.device_id = App.get_name();
 
+    // Hand the YAML default to the registry; effective name combines that with
+    // the NVS override (loaded during init_preferences()).
+    registry.set_default_hub_name(default_device_name_);
+    ctx_.device_name = registry.hub_display_name();
+
     ESP_LOGD(TAG, "MQTT adapter setup: prefix=%s, discovery=%s, device=%s",
              ctx_.topic_prefix.c_str(), ctx_.discovery_prefix.c_str(),
              ctx_.device_name.c_str());
@@ -47,6 +52,16 @@ void MqttAdapter::setup(DeviceRegistry &registry) {
         start_stale_collection_();
         mqtt_was_connected_ = true;
     }
+}
+
+void MqttAdapter::on_hub_config_changed() {
+    if (registry_ == nullptr) return;
+    ctx_.device_name = registry_->hub_display_name();
+    if (!ctx_.mqtt->is_connected()) return;
+
+    // Only the gateway discovery embeds the hub name; child devices link via
+    // `via_device: device_id` which is stable.
+    publish_gateway_discovery_();
 }
 
 void MqttAdapter::loop() {
@@ -168,9 +183,10 @@ void MqttAdapter::publish_cover_discovery_(const Device &dev) {
     auto oid = ctx_.object_id(DeviceType::COVER, addr);
     bool tilt = dev.config.supports_tilt != 0;
 
-    // Cover entity
+    // Cover entity — primary entity has no name; HA uses device name as friendly name.
     std::string payload = json::build_json([&](JsonObject root) {
-        root["name"] = dev.config.name;
+        root["name"] = nullptr;
+        root["has_entity_name"] = true;
         root["unique_id"] = oid;
         root["command_topic"] = ctx_.topic(DeviceType::COVER, addr, mqtt_topic::SET);
         root["state_topic"] = ctx_.topic(DeviceType::COVER, addr, mqtt_topic::STATE);
@@ -193,14 +209,15 @@ void MqttAdapter::publish_cover_discovery_(const Device &dev) {
         }
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_child_device_block(device, DeviceType::COVER, addr, dev.config.name);
     });
     ctx_.publish_discovery(ha_discovery::COVER, oid, payload);
 
     // RSSI sensor
     auto rssi_oid = ctx_.object_id(DeviceType::COVER, addr, "rssi");
     std::string rssi_payload = json::build_json([&](JsonObject root) {
-        root["name"] = std::string(dev.config.name) + " RSSI";
+        root["name"] = "RSSI";
+        root["has_entity_name"] = true;
         root["unique_id"] = rssi_oid;
         root["state_topic"] = ctx_.topic(DeviceType::COVER, addr, mqtt_topic::RSSI);
         root["unit_of_measurement"] = "dBm";
@@ -209,14 +226,15 @@ void MqttAdapter::publish_cover_discovery_(const Device &dev) {
         root["entity_category"] = "diagnostic";
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_child_device_block(device, DeviceType::COVER, addr, dev.config.name);
     });
     ctx_.publish_discovery(ha_discovery::SENSOR, rssi_oid, rssi_payload);
 
     // Blind state sensor (enum)
     auto state_oid = ctx_.object_id(DeviceType::COVER, addr, "state");
     std::string state_payload = json::build_json([&](JsonObject root) {
-        root["name"] = std::string(dev.config.name) + " State";
+        root["name"] = "State";
+        root["has_entity_name"] = true;
         root["unique_id"] = state_oid;
         root["state_topic"] = ctx_.topic(DeviceType::COVER, addr, mqtt_topic::DEVICE_STATE);
         root["device_class"] = "enum";
@@ -226,21 +244,22 @@ void MqttAdapter::publish_cover_discovery_(const Device &dev) {
         for (auto *s : COVER_STATE_OPTIONS) opts.add(s);
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_child_device_block(device, DeviceType::COVER, addr, dev.config.name);
     });
     ctx_.publish_discovery(ha_discovery::SENSOR, state_oid, state_payload);
 
     // Problem binary_sensor
     auto problem_oid = ctx_.object_id(DeviceType::COVER, addr, "problem");
     std::string problem_payload = json::build_json([&](JsonObject root) {
-        root["name"] = std::string(dev.config.name) + " Problem";
+        root["name"] = "Problem";
+        root["has_entity_name"] = true;
         root["unique_id"] = problem_oid;
         root["state_topic"] = ctx_.topic(DeviceType::COVER, addr, mqtt_topic::PROBLEM);
         root["device_class"] = "problem";
         root["entity_category"] = "diagnostic";
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_child_device_block(device, DeviceType::COVER, addr, dev.config.name);
     });
     ctx_.publish_discovery(ha_discovery::BINARY_SENSOR, problem_oid, problem_payload);
 
@@ -351,9 +370,10 @@ void MqttAdapter::publish_light_discovery_(const Device &dev) {
     auto oid = ctx_.object_id(DeviceType::LIGHT, addr);
     bool has_brightness = dev.config.dim_duration_ms > 0;
 
-    // Light entity
+    // Light entity — primary entity has no name; HA uses device name as friendly name.
     std::string payload = json::build_json([&](JsonObject root) {
-        root["name"] = dev.config.name;
+        root["name"] = nullptr;
+        root["has_entity_name"] = true;
         root["unique_id"] = oid;
         root["schema"] = "json";
         root["command_topic"] = ctx_.topic(DeviceType::LIGHT, addr, mqtt_topic::SET);
@@ -365,14 +385,15 @@ void MqttAdapter::publish_light_discovery_(const Device &dev) {
         root["json_attributes_topic"] = ctx_.topic(DeviceType::LIGHT, addr, mqtt_topic::ATTRIBUTES);
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_child_device_block(device, DeviceType::LIGHT, addr, dev.config.name);
     });
     ctx_.publish_discovery(ha_discovery::LIGHT, oid, payload);
 
     // RSSI sensor
     auto rssi_oid = ctx_.object_id(DeviceType::LIGHT, addr, "rssi");
     std::string rssi_payload = json::build_json([&](JsonObject root) {
-        root["name"] = std::string(dev.config.name) + " RSSI";
+        root["name"] = "RSSI";
+        root["has_entity_name"] = true;
         root["unique_id"] = rssi_oid;
         root["state_topic"] = ctx_.topic(DeviceType::LIGHT, addr, mqtt_topic::RSSI);
         root["unit_of_measurement"] = "dBm";
@@ -381,14 +402,15 @@ void MqttAdapter::publish_light_discovery_(const Device &dev) {
         root["entity_category"] = "diagnostic";
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_child_device_block(device, DeviceType::LIGHT, addr, dev.config.name);
     });
     ctx_.publish_discovery(ha_discovery::SENSOR, rssi_oid, rssi_payload);
 
     // Light state sensor (enum)
     auto state_oid = ctx_.object_id(DeviceType::LIGHT, addr, "state");
     std::string state_payload = json::build_json([&](JsonObject root) {
-        root["name"] = std::string(dev.config.name) + " State";
+        root["name"] = "State";
+        root["has_entity_name"] = true;
         root["unique_id"] = state_oid;
         root["state_topic"] = ctx_.topic(DeviceType::LIGHT, addr, mqtt_topic::DEVICE_STATE);
         root["device_class"] = "enum";
@@ -398,21 +420,22 @@ void MqttAdapter::publish_light_discovery_(const Device &dev) {
         for (auto *s : LIGHT_STATE_OPTIONS) opts.add(s);
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_child_device_block(device, DeviceType::LIGHT, addr, dev.config.name);
     });
     ctx_.publish_discovery(ha_discovery::SENSOR, state_oid, state_payload);
 
     // Problem binary_sensor
     auto problem_oid = ctx_.object_id(DeviceType::LIGHT, addr, "problem");
     std::string problem_payload = json::build_json([&](JsonObject root) {
-        root["name"] = std::string(dev.config.name) + " Problem";
+        root["name"] = "Problem";
+        root["has_entity_name"] = true;
         root["unique_id"] = problem_oid;
         root["state_topic"] = ctx_.topic(DeviceType::LIGHT, addr, mqtt_topic::PROBLEM);
         root["device_class"] = "problem";
         root["entity_category"] = "diagnostic";
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_child_device_block(device, DeviceType::LIGHT, addr, dev.config.name);
     });
     ctx_.publish_discovery(ha_discovery::BINARY_SENSOR, problem_oid, problem_payload);
 
@@ -511,7 +534,8 @@ void MqttAdapter::publish_remote_discovery_(const Device &dev) {
     auto st = ctx_.topic(DeviceType::REMOTE, addr, mqtt_topic::STATE);
 
     std::string payload = json::build_json([&](JsonObject root) {
-        root["name"] = dev.config.name;
+        root["name"] = nullptr;
+        root["has_entity_name"] = true;
         root["unique_id"] = oid;
         root["state_topic"] = st;
         root["value_template"] = "{{ value_json.rssi }}";
@@ -521,7 +545,7 @@ void MqttAdapter::publish_remote_discovery_(const Device &dev) {
         root["json_attributes_template"] = "{{ value_json | tojson }}";
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_child_device_block(device, DeviceType::REMOTE, addr, dev.config.name);
     });
     ctx_.publish_discovery(ha_discovery::SENSOR, oid, payload);
 
@@ -559,7 +583,8 @@ void MqttAdapter::publish_gateway_discovery_() {
     auto st = ctx_.topic_prefix + "/gateway/state";
 
     std::string payload = json::build_json([&](JsonObject root) {
-        root["name"] = "Gateway";
+        root["name"] = "Active devices";
+        root["has_entity_name"] = true;
         root["unique_id"] = oid;
         root["object_id"] = oid;
         root["state_topic"] = st;
@@ -571,7 +596,7 @@ void MqttAdapter::publish_gateway_discovery_() {
         root["json_attributes_template"] = "{{ value_json | tojson }}";
         ctx_.add_availability(root);
         JsonObject device = root["device"].to<JsonObject>();
-        ctx_.add_device_block(device);
+        ctx_.add_hub_device_block(device);
     });
 
     ctx_.mqtt->publish(

@@ -15,6 +15,7 @@ export function createHubModel() {
     version: '',
     mode: 'native',
     crud: false,
+    name: '',
   })
   const radioState = signal<RadioConfig>({
     chipset: 'cc1101',

@@ -10,11 +10,13 @@
 #pragma once
 
 #include "device.h"
+#include "nvs_hub_config.h"
 #include "output_adapter.h"
 #include "overloaded.h"
 #include "esphome/core/preferences.h"
 #include <array>
 #include <concepts>
+#include <string>
 #include <vector>
 
 namespace esphome::elero {
@@ -167,6 +169,23 @@ class DeviceRegistry {
     /// Persist a device (finds slot index automatically).
     void persist(Device &dev);
 
+    // ═════════════════════════════════════════════════════════════════════════
+    // HUB-LEVEL CONFIG (user-overridable hub display name)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// Hub display name: user override from NVS if set, otherwise default from YAML.
+    /// Used by the MQTT adapter for the HA gateway device block and by the web
+    /// UI for display.
+    [[nodiscard]] const std::string &hub_display_name() const { return hub_display_name_; }
+
+    /// Default hub name (YAML-configured, fallback when no NVS override).
+    void set_default_hub_name(const std::string &name);
+
+    /// Override the hub display name (persists to NVS).
+    /// Empty string clears the override and falls back to the default name.
+    /// Returns true if value actually changed (so callers can republish discovery).
+    bool set_hub_name_override(const std::string &name);
+
  private:
     std::array<Device, MAX_DEVICES> slots_{};
     std::vector<OutputAdapter *> adapters_;
@@ -177,6 +196,14 @@ class DeviceRegistry {
     // NVS preference handles (one per slot)
     ESPPreferenceObject prefs_[MAX_DEVICES]{};
     bool prefs_initialized_{false};
+
+    // Hub config (display name override)
+    ESPPreferenceObject hub_prefs_{};
+    std::string hub_default_name_;       ///< YAML-configured default
+    std::string hub_name_override_;      ///< NVS override (empty = no override)
+    std::string hub_display_name_;       ///< Effective name (override or default)
+
+    void update_hub_display_name_();
 
     // ── Internal helpers ──
     Device *find_free_slot_();

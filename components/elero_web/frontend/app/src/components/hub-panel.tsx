@@ -1,4 +1,4 @@
-import { useSignal, useComputed } from '@preact/signals'
+import { useSignal, useSignalEffect, useComputed } from '@preact/signals'
 import { Card } from './ui/card'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -7,7 +7,7 @@ import { Send, Info } from './icons'
 import { RfPackets } from './rf-packets'
 import { cn } from '@/lib/utils'
 import { hub, radio, devices, filterCounts, parseFreq } from '@/store'
-import { sendRawCommand } from '@/ws'
+import { sendRawCommand, sendSetHubConfig } from '@/ws'
 
 // ─── Frequency Presets ──────────────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ const isValidHex = (s: string) => /^0x[0-9a-fA-F]+$/.test(s)
 // ─── Hub Info Card ──────────────────────────────────────────────────────────
 
 function HubInfoCard() {
-  const { device } = hub.value
+  const { device, name } = hub.value
   const freq = radio.value.freq
   const counts = filterCounts.value
 
@@ -49,6 +49,19 @@ function HubInfoCard() {
   const f1 = parseFreq(freq.freq1, 0x71)
   const f0 = parseFreq(freq.freq0, 0x7a)
   const calculatedFreq = `${calcFreqMHz(f2, f1, f0)} MHz`
+
+  // Local edit buffer — re-synced from the server value whenever it changes
+  // (initial mount, our own Save round-trip, or a peer client renaming the hub).
+  const draftName = useSignal(name)
+  useSignalEffect(() => { draftName.value = hub.value.name })
+  const dirty = draftName.value !== name
+  const handleSave = () => {
+    sendSetHubConfig(draftName.value.trim())
+  }
+  const handleReset = () => {
+    // Empty string clears the override server-side → falls back to YAML default
+    sendSetHubConfig('')
+  }
 
   return (
     <Card className="gap-0 overflow-hidden p-0">
@@ -63,6 +76,30 @@ function HubInfoCard() {
         <Stat label="Covers" value={String(counts.covers)} />
         <Stat label="Lights" value={String(counts.lights)} />
         <Stat label="Frequency" value={calculatedFreq} />
+      </div>
+      <div className="border-t border-border px-5 py-4">
+        <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Display Name (HA gateway)
+        </label>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={draftName.value}
+            onInput={(e) => { draftName.value = (e.target as HTMLInputElement).value }}
+            maxLength={31}
+            placeholder="Elero Gateway"
+            className="h-8 w-full max-w-sm rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+          />
+          <Button onClick={handleSave} disabled={!dirty} className={cn('h-8 px-3 text-xs', dirty && 'bg-amber-600 hover:bg-amber-700')}>
+            Save
+          </Button>
+          <Button onClick={handleReset} variant="secondary" className="h-8 px-3 text-xs">
+            Reset to default
+          </Button>
+        </div>
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          Persisted to NVS. Applies live to MQTT HA discovery and this UI. Empty resets to the YAML-configured default.
+        </p>
       </div>
     </Card>
   )

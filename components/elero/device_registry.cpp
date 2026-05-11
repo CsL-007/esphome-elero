@@ -22,7 +22,47 @@ void DeviceRegistry::init_preferences() {
         prefs_[i] = global_preferences->make_preference<NvsDeviceConfig>(
             fnv1_hash("elero_device") + i);
     }
+    hub_prefs_ = global_preferences->make_preference<NvsHubConfig>(
+        fnv1_hash(nvs_pref_key::HUB));
+    NvsHubConfig hub_cfg{};
+    if (hub_prefs_.load(&hub_cfg) && hub_cfg.is_valid()) {
+        hub_name_override_ = hub_cfg.name;
+    }
+    update_hub_display_name_();
     prefs_initialized_ = true;
+}
+
+void DeviceRegistry::set_default_hub_name(const std::string &name) {
+    hub_default_name_ = name;
+    update_hub_display_name_();
+}
+
+bool DeviceRegistry::set_hub_name_override(const std::string &name) {
+    std::string trimmed = name;
+    // Cap to NVS field length (minus null terminator)
+    if (trimmed.size() >= NVS_HUB_NAME_MAX) {
+        trimmed.resize(NVS_HUB_NAME_MAX - 1);
+    }
+    if (trimmed == hub_name_override_) return false;
+    hub_name_override_ = trimmed;
+    if (prefs_initialized_) {
+        NvsHubConfig hub_cfg{};
+        hub_cfg.set_name(hub_name_override_.c_str());
+        if (!hub_prefs_.save(&hub_cfg)) {
+            ESP_LOGW(TAG, "Failed to persist hub name to NVS");
+        }
+    }
+    update_hub_display_name_();
+    ESP_LOGI(TAG, "Hub display name set to '%s'", hub_display_name_.c_str());
+    for (auto *a : adapters_) {
+        a->on_hub_config_changed();
+    }
+    return true;
+}
+
+void DeviceRegistry::update_hub_display_name_() {
+    hub_display_name_ = hub_name_override_.empty() ? hub_default_name_
+                                                   : hub_name_override_;
 }
 
 void DeviceRegistry::restore_all() {

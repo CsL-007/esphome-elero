@@ -46,6 +46,11 @@ class OutputAdapter {
     /// A raw RF packet was decoded (for web UI forwarding, logging, etc.).
     /// Not all adapters need this — default is no-op.
     virtual void on_rf_packet(const RfPacketInfo &pkt) {}
+
+    /// Hub-level config changed (e.g., display name override). Adapters that
+    /// embed the hub name in published metadata (MQTT discovery device block,
+    /// WebSocket config event) should re-publish.
+    virtual void on_hub_config_changed() {}
 };
 
 }  // namespace esphome::elero
