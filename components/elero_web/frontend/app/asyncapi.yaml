@@ -1146,7 +1146,10 @@ components:
       properties:
         snapshot_version:
           type: integer
-          description: Snapshot envelope version (currently 1).
+          description: |
+            Snapshot envelope version (currently 1). Must match the C++
+            `SNAPSHOT_VERSION` const in `components/elero_web/elero_web_server.cpp` —
+            the import handler rejects any value it doesn't recognise.
           examples: [1]
         exported_at:
           type: integer

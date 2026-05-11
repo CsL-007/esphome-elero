@@ -609,7 +609,7 @@ bool EleroWebServer::parse_device_config_(JsonObject root, NvsDeviceConfig &conf
 void EleroWebServer::handle_upsert_device_(struct mg_connection *c, JsonObject root) {
   auto *registry = this->parent_->get_registry();
   if (registry == nullptr || !registry->is_nvs_enabled()) {
-    this->ws_send(c, "error", "{\"msg\":\"CRUD not supported in native mode\"}");
+    this->ws_send(c, "error", "{\"msg\":\"Device CRUD requires elero_nvs or elero_mqtt\"}");
     return;
   }
 
@@ -628,7 +628,7 @@ void EleroWebServer::handle_upsert_device_(struct mg_connection *c, JsonObject r
 void EleroWebServer::handle_remove_device_(struct mg_connection *c, JsonObject root) {
   auto *registry = this->parent_->get_registry();
   if (registry == nullptr || !registry->is_nvs_enabled()) {
-    this->ws_send(c, "error", "{\"msg\":\"CRUD not supported in native mode\"}");
+    this->ws_send(c, "error", "{\"msg\":\"Device CRUD requires elero_nvs or elero_mqtt\"}");
     return;
   }
 
@@ -653,6 +653,9 @@ void EleroWebServer::handle_remove_device_(struct mg_connection *c, JsonObject r
 // Backup / Restore (export_config / import_config)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Bump in lockstep with the `snapshot_version` const in
+// frontend/app/asyncapi.yaml (`ConfigSnapshot.snapshot_version`).
+// A drift makes every import fail with "Unsupported snapshot_version".
 constexpr uint8_t SNAPSHOT_VERSION = 1;
 
 void EleroWebServer::build_device_snapshot_(const NvsDeviceConfig &cfg, JsonObject out) {
@@ -725,7 +728,7 @@ void EleroWebServer::handle_export_config_(struct mg_connection *c, JsonObject /
 void EleroWebServer::handle_import_config_(struct mg_connection *c, JsonObject root) {
   auto *registry = this->parent_->get_registry();
   if (registry == nullptr || !registry->is_nvs_enabled()) {
-    this->ws_send(c, "error", "{\"msg\":\"Import not supported in native mode\"}");
+    this->ws_send(c, "error", "{\"msg\":\"Import requires elero_nvs or elero_mqtt\"}");
     return;
   }
 
@@ -762,13 +765,14 @@ void EleroWebServer::handle_import_config_(struct mg_connection *c, JsonObject r
     errors_json += entry;
   };
 
-  // Apply hub overrides (currently just name_override).
+  // Apply hub overrides (currently just name_override). set_hub_name_override
+  // returns false when the value matches what's already persisted — avoid
+  // claiming a no-op as a successful restore in the import_result toast.
   if (snap["hub"].is<JsonObject>()) {
     JsonObject hub_obj = snap["hub"].as<JsonObject>();
     if (hub_obj["name_override"].is<const char *>()) {
       const char *name = hub_obj["name_override"].as<const char *>();
-      registry->set_hub_name_override(name == nullptr ? "" : name);
-      hub_applied = true;
+      hub_applied = registry->set_hub_name_override(name == nullptr ? "" : name);
     }
   }
 
