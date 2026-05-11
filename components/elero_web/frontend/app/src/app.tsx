@@ -8,6 +8,7 @@ import { ControlBar } from './components/control-bar'
 import { DeviceGrid } from './components/device-grid'
 import { RfPackets } from './components/rf-packets'
 import { HubPanel } from './components/hub-panel'
+import { Toaster } from './components/toaster'
 
 // ─── Side effects (module-level, run once on import) ────────────────────────
 
@@ -69,6 +70,7 @@ export function App() {
           </div>
         </div>
       </div>
+      <Toaster />
     </div>
   )
 }

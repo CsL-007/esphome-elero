@@ -1050,3 +1050,23 @@ TEST_F(DeviceRegistryTest, HubName_SetDefaultDoesNotOverrideExistingOverride) {
     registry_.set_default_hub_name("Elero Gateway");
     EXPECT_EQ(registry_.hub_display_name(), "Living Room");
 }
+
+// hub_default_name() / has_hub_name_override() are used by export_config to
+// decide whether to include `hub.name_override` in the snapshot envelope.
+TEST_F(DeviceRegistryTest, HubName_DefaultNameAccessor) {
+    registry_.set_default_hub_name("Elero Gateway");
+    EXPECT_EQ(registry_.hub_default_name(), "Elero Gateway");
+    EXPECT_FALSE(registry_.has_hub_name_override());
+}
+
+TEST_F(DeviceRegistryTest, HubName_HasOverrideReflectsState) {
+    registry_.set_default_hub_name("Elero Gateway");
+    registry_.init_preferences();
+    EXPECT_FALSE(registry_.has_hub_name_override());
+
+    registry_.set_hub_name_override("Living Room");
+    EXPECT_TRUE(registry_.has_hub_name_override());
+
+    registry_.set_hub_name_override("");
+    EXPECT_FALSE(registry_.has_hub_name_override());
+}

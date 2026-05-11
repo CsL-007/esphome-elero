@@ -326,6 +326,8 @@ void EleroWebServer::handle_ws_message(struct mg_connection *c, struct mg_ws_mes
     if (type == "upsert_device") { this->handle_upsert_device_(c, root); return true; }
     if (type == "remove_device") { this->handle_remove_device_(c, root); return true; }
     if (type == "set_hub_config") { this->handle_set_hub_config_(c, root); return true; }
+    if (type == "export_config") { this->handle_export_config_(c, root); return true; }
+    if (type == "import_config") { this->handle_import_config_(c, root); return true; }
     if (type == "restart") { App.safe_reboot(); return true; }
 
     if (type == "raw") {
@@ -645,6 +647,173 @@ void EleroWebServer::handle_remove_device_(struct mg_connection *c, JsonObject r
   if (!registry->remove(addr, type)) {
     this->ws_send(c, "error", "{\"msg\":\"Failed to remove device\"}");
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Backup / Restore (export_config / import_config)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+constexpr uint8_t SNAPSHOT_VERSION = 1;
+
+void EleroWebServer::build_device_snapshot_(const NvsDeviceConfig &cfg, JsonObject out) {
+  out["device_type"] = device_type_str(cfg.type);
+  out["dst_address"] = hex_str(cfg.dst_address);
+  out["name"] = cfg.name;
+  out["enabled"] = cfg.is_enabled();
+
+  if (!cfg.is_remote()) {
+    out["src_address"] = hex_str(cfg.src_address);
+    out["channel"] = cfg.channel;
+    out["hop"] = hex_str8(cfg.hop);
+    out["payload_1"] = hex_str8(cfg.payload_1);
+    out["payload_2"] = hex_str8(cfg.payload_2);
+    out["msg_type"] = hex_str8(cfg.type_byte);
+    out["type2"] = hex_str8(cfg.type2);
+  }
+  if (cfg.is_cover()) {
+    out["open_duration_ms"] = cfg.open_duration_ms;
+    out["close_duration_ms"] = cfg.close_duration_ms;
+    out["supports_tilt"] = cfg.supports_tilt != 0;
+    out["ha_device_class"] = cfg.ha_device_class;
+  }
+  if (cfg.is_light()) {
+    out["dim_duration_ms"] = cfg.dim_duration_ms;
+  }
+}
+
+std::string EleroWebServer::build_config_snapshot_json_() {
+  return json::build_json([this](JsonObject root) {
+    auto *registry = this->parent_->get_registry();
+
+    root["snapshot_version"] = SNAPSHOT_VERSION;
+    root["exported_at"] = millis();
+
+    JsonObject exporter = root["exporter"].to<JsonObject>();
+    exporter["device"] = App.get_name();
+    exporter["version"] = this->parent_->get_version();
+
+    JsonObject hub = root["hub"].to<JsonObject>();
+    // Only include the override if one is set; absence == "no override".
+    if (registry != nullptr) {
+      const std::string &display = registry->hub_display_name();
+      // We want the persisted *override*, not the effective name. The display
+      // name is override-or-default; if it equals the default, no override is set.
+      const std::string &def = registry->hub_default_name();
+      if (display != def) {
+        hub["name_override"] = display;
+      }
+    }
+
+    JsonArray devices = root["devices"].to<JsonArray>();
+    if (registry != nullptr) {
+      registry->for_each_active([&](const Device &dev) {
+        // Skip auto-discovered remotes that haven't been persisted yet.
+        if (dev.config.updated_at == 0) return;
+        JsonObject obj = devices.add<JsonObject>();
+        this->build_device_snapshot_(dev.config, obj);
+      });
+    }
+  });
+}
+
+void EleroWebServer::handle_export_config_(struct mg_connection *c, JsonObject /*root*/) {
+  std::string snapshot = this->build_config_snapshot_json_();
+  this->ws_send(c, "config_snapshot", snapshot);
+  ESP_LOGI(TAG, "Sent config snapshot (%zu bytes)", snapshot.size());
+}
+
+void EleroWebServer::handle_import_config_(struct mg_connection *c, JsonObject root) {
+  auto *registry = this->parent_->get_registry();
+  if (registry == nullptr || !registry->is_nvs_enabled()) {
+    this->ws_send(c, "error", "{\"msg\":\"Import not supported in native mode\"}");
+    return;
+  }
+
+  if (!root["snapshot"].is<JsonObject>()) {
+    this->ws_send(c, "error", "{\"msg\":\"Missing 'snapshot' object\"}");
+    return;
+  }
+  JsonObject snap = root["snapshot"].as<JsonObject>();
+
+  uint32_t snap_version = snap["snapshot_version"] | 0;
+  if (snap_version != SNAPSHOT_VERSION) {
+    char buf[96];
+    snprintf(buf, sizeof(buf),
+             "{\"msg\":\"Unsupported snapshot_version %u (expected %u)\"}",
+             (unsigned) snap_version, (unsigned) SNAPSHOT_VERSION);
+    this->ws_send(c, "error", buf);
+    return;
+  }
+
+  uint32_t added = 0;
+  uint32_t updated = 0;
+  uint32_t skipped = 0;
+  bool hub_applied = false;
+
+  // Collect errors as a serialized JSON array (built incrementally to avoid
+  // building two ArduinoJson docs at once).
+  std::string errors_json = "[";
+  auto append_error = [&](int idx, const std::string &msg) {
+    if (errors_json.size() > 1) errors_json += ',';
+    std::string entry = json::build_json([&](JsonObject e) {
+      e["index"] = idx;
+      e["msg"] = msg;
+    });
+    errors_json += entry;
+  };
+
+  // Apply hub overrides (currently just name_override).
+  if (snap["hub"].is<JsonObject>()) {
+    JsonObject hub_obj = snap["hub"].as<JsonObject>();
+    if (hub_obj["name_override"].is<const char *>()) {
+      const char *name = hub_obj["name_override"].as<const char *>();
+      registry->set_hub_name_override(name == nullptr ? "" : name);
+      hub_applied = true;
+    }
+  }
+
+  // Apply each device through parse_device_config_ + upsert.
+  if (snap["devices"].is<JsonArray>()) {
+    JsonArray devs = snap["devices"].as<JsonArray>();
+    int idx = -1;
+    for (JsonVariant v : devs) {
+      ++idx;
+      if (!v.is<JsonObject>()) {
+        append_error(idx, "Device entry is not an object");
+        ++skipped;
+        continue;
+      }
+      JsonObject obj = v.as<JsonObject>();
+      NvsDeviceConfig cfg{};
+      std::string error;
+      if (!this->parse_device_config_(obj, cfg, error)) {
+        append_error(idx, error);
+        ++skipped;
+        continue;
+      }
+
+      bool was_existing = (registry->find(cfg.dst_address, cfg.type) != nullptr);
+      if (registry->upsert(cfg) == nullptr) {
+        append_error(idx, "No free slot");
+        ++skipped;
+        continue;
+      }
+      if (was_existing) ++updated; else ++added;
+    }
+  }
+
+  errors_json += "]";
+
+  std::string reply = json::build_json([&](JsonObject r) {
+    r["added"] = added;
+    r["updated"] = updated;
+    r["skipped"] = skipped;
+    r["hub_applied"] = hub_applied;
+    r["errors"] = serialized(errors_json);
+  });
+  this->ws_send(c, "import_result", reply);
+  ESP_LOGI(TAG, "Import: %u added, %u updated, %u skipped, hub_applied=%d",
+           (unsigned) added, (unsigned) updated, (unsigned) skipped, hub_applied);
 }
 
 void EleroWebServer::handle_set_hub_config_(struct mg_connection *c, JsonObject root) {

@@ -178,6 +178,13 @@ class DeviceRegistry {
     /// UI for display.
     [[nodiscard]] const std::string &hub_display_name() const { return hub_display_name_; }
 
+    /// YAML-configured default hub name (no NVS override applied).
+    [[nodiscard]] const std::string &hub_default_name() const { return hub_default_name_; }
+
+    /// True when the user has set a non-empty hub name override (i.e. the
+    /// effective display name differs from the YAML default).
+    [[nodiscard]] bool has_hub_name_override() const { return !hub_name_override_.empty(); }
+
     /// Default hub name (YAML-configured, fallback when no NVS override).
     void set_default_hub_name(const std::string &name);
 
