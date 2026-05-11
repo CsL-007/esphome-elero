@@ -129,6 +129,9 @@ struct MockAdapter : public OutputAdapter {
     void on_rf_packet(const RfPacketInfo &) override {
         rf_packets++;
     }
+    void on_hub_config_changed() override {
+        hub_config_changed++;
+    }
 
     std::vector<uint32_t> added;
     std::vector<uint32_t> removed;
@@ -136,10 +139,12 @@ struct MockAdapter : public OutputAdapter {
     std::vector<uint16_t> last_changes;
     std::vector<uint32_t> config_changed;
     int rf_packets{0};
+    int hub_config_changed{0};
 
     void clear() {
         added.clear(); removed.clear(); state_changed.clear();
-        last_changes.clear(); config_changed.clear(); rf_packets = 0;
+        last_changes.clear(); config_changed.clear();
+        rf_packets = 0; hub_config_changed = 0;
     }
 };
 
@@ -985,4 +990,63 @@ TEST_F(DeviceRegistryTest, CommandGroup_TracksCommandSource) {
     auto &cover2 = std::get<CoverDevice>(dev2->logic);
     EXPECT_EQ(cover1.last_command_source, CommandSource::REMOTE);
     EXPECT_EQ(cover2.last_command_source, CommandSource::REMOTE);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Hub name override (NvsHubConfig)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+TEST_F(DeviceRegistryTest, HubName_DefaultUsedWhenNoOverride) {
+    registry_.set_default_hub_name("Elero Gateway");
+    EXPECT_EQ(registry_.hub_display_name(), "Elero Gateway");
+}
+
+TEST_F(DeviceRegistryTest, HubName_OverrideTakesPrecedenceOverDefault) {
+    registry_.set_default_hub_name("Elero Gateway");
+    registry_.init_preferences();  // Activate NVS persistence path
+    adapter_.clear();
+
+    EXPECT_TRUE(registry_.set_hub_name_override("Living Room"));
+    EXPECT_EQ(registry_.hub_display_name(), "Living Room");
+    EXPECT_EQ(adapter_.hub_config_changed, 1);
+}
+
+TEST_F(DeviceRegistryTest, HubName_EmptyOverrideFallsBackToDefault) {
+    registry_.set_default_hub_name("Elero Gateway");
+    registry_.init_preferences();
+    registry_.set_hub_name_override("Living Room");
+    adapter_.clear();
+
+    EXPECT_TRUE(registry_.set_hub_name_override(""));
+    EXPECT_EQ(registry_.hub_display_name(), "Elero Gateway");
+    EXPECT_EQ(adapter_.hub_config_changed, 1);
+}
+
+TEST_F(DeviceRegistryTest, HubName_IdenticalOverrideIsNoOp) {
+    registry_.set_default_hub_name("Elero Gateway");
+    registry_.init_preferences();
+    registry_.set_hub_name_override("Living Room");
+    adapter_.clear();
+
+    EXPECT_FALSE(registry_.set_hub_name_override("Living Room"));
+    EXPECT_EQ(adapter_.hub_config_changed, 0);  // No notification on no-op
+}
+
+TEST_F(DeviceRegistryTest, HubName_TruncatedToNvsBufferSize) {
+    registry_.init_preferences();
+    // 40 chars, NVS_HUB_NAME_MAX = 32 → max payload 31 chars + NUL.
+    std::string long_name(40, 'A');
+    EXPECT_TRUE(registry_.set_hub_name_override(long_name));
+    EXPECT_EQ(registry_.hub_display_name().size(), NVS_HUB_NAME_MAX - 1);
+    EXPECT_EQ(registry_.hub_display_name(), std::string(NVS_HUB_NAME_MAX - 1, 'A'));
+}
+
+TEST_F(DeviceRegistryTest, HubName_SetDefaultDoesNotOverrideExistingOverride) {
+    registry_.init_preferences();
+    registry_.set_hub_name_override("Living Room");
+
+    // YAML default arrives later (e.g. set_default_hub_name called during adapter setup
+    // after init_preferences has already loaded the override from NVS).
+    registry_.set_default_hub_name("Elero Gateway");
+    EXPECT_EQ(registry_.hub_display_name(), "Living Room");
 }

@@ -1,4 +1,4 @@
-import { useSignal, useComputed } from '@preact/signals'
+import { useSignal, useSignalEffect, useComputed } from '@preact/signals'
 import { Card } from './ui/card'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -50,13 +50,10 @@ function HubInfoCard() {
   const f0 = parseFreq(freq.freq0, 0x7a)
   const calculatedFreq = `${calcFreqMHz(f2, f1, f0)} MHz`
 
-  // Local edit buffer — initialised from the server value, only persisted on Save.
+  // Local edit buffer — re-synced from the server value whenever it changes
+  // (initial mount, our own Save round-trip, or a peer client renaming the hub).
   const draftName = useSignal(name)
-  const lastSyncedName = useSignal(name)
-  if (lastSyncedName.value !== name) {
-    lastSyncedName.value = name
-    draftName.value = name
-  }
+  useSignalEffect(() => { draftName.value = hub.value.name })
   const dirty = draftName.value !== name
   const handleSave = () => {
     sendSetHubConfig(draftName.value.trim())

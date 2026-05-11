@@ -411,7 +411,9 @@ std::string EleroWebServer::build_config_json() {
     hub["version"] = this->parent_->get_version();
     hub["mode"] = registry ? hub_mode_str(registry->hub_mode()) : "native";
     hub["crud"] = has_nvs;
-    hub["name"] = registry ? registry->hub_display_name().c_str() : App.get_name();
+    // Assign std::string by value — ArduinoJson copies, so we don't depend on
+    // the registry's std::string outliving the document.
+    hub["name"] = registry ? registry->hub_display_name() : App.get_name();
 
     // radio — RF hardware configuration and capabilities
     auto *drv = this->parent_->get_driver();
@@ -656,8 +658,10 @@ void EleroWebServer::handle_set_hub_config_(struct mg_connection *c, JsonObject 
   registry->set_hub_name_override(name);
 
   // Broadcast updated config to all clients so frontends refresh.
-  this->ws_broadcast("hub_config", json::build_json([registry](JsonObject r) {
-    r["name"] = registry->hub_display_name().c_str();
+  // Capture the name by value to keep the JSON build pure of registry lifetime.
+  std::string display_name = registry->hub_display_name();
+  this->ws_broadcast("hub_config", json::build_json([&display_name](JsonObject r) {
+    r["name"] = display_name;
   }));
 }
 

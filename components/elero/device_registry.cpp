@@ -48,7 +48,9 @@ bool DeviceRegistry::set_hub_name_override(const std::string &name) {
     if (prefs_initialized_) {
         NvsHubConfig hub_cfg{};
         hub_cfg.set_name(hub_name_override_.c_str());
-        hub_prefs_.save(&hub_cfg);
+        if (!hub_prefs_.save(&hub_cfg)) {
+            ESP_LOGW(TAG, "Failed to persist hub name to NVS");
+        }
     }
     update_hub_display_name_();
     ESP_LOGI(TAG, "Hub display name set to '%s'", hub_display_name_.c_str());
