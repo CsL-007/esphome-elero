@@ -148,11 +148,35 @@ struct MqttContext {
 
   // ── HA device/availability blocks ───────────────────────────
 
-  /// Add the standard HA device block to a discovery payload.
-  void add_device_block(JsonObject dev) const {
+  /// Add the hub device block (gateway sensor — parent device).
+  void add_hub_device_block(JsonObject dev) const {
     dev["identifiers"][0] = device_id;
     dev["name"] = device_name;
     dev["manufacturer"] = MANUFACTURER;
+    dev["model"] = "Gateway";
+  }
+
+  /// Add a per-blind device block (each Elero device is its own HA device,
+  /// linked to the hub via `via_device`). This is what removes the redundant
+  /// "Elero Gateway" prefix from entity names in HA's room/area views.
+  void add_child_device_block(JsonObject dev, DeviceType type, uint32_t addr,
+                               const char *name) const {
+    const char *type_str = device_type_str(type);
+    auto hex = addr_hex(addr);
+    std::string ident;
+    ident.reserve(device_id.size() + 1 + strlen(type_str) + 1 + hex.size());
+    ident += device_id;
+    ident += '_';
+    ident += type_str;
+    ident += '_';
+    ident += hex;
+    dev["identifiers"][0] = ident;
+    dev["name"] = name;
+    dev["manufacturer"] = MANUFACTURER;
+    dev["model"] = (type == DeviceType::COVER) ? "Cover"
+                  : (type == DeviceType::LIGHT) ? "Light"
+                                                : "Remote";
+    dev["via_device"] = device_id;
   }
 
   /// Add availability block so entities go unavailable when hub is offline.

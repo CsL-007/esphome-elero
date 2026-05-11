@@ -1,7 +1,7 @@
-import type { CmdPayload, RawPayload, UpsertDevicePayload, RemoveDevicePayload, RestartPayload, DeviceAction, StateChangedData } from '@/generated'
+import type { CmdPayload, RawPayload, UpsertDevicePayload, RemoveDevicePayload, RestartPayload, SetHubConfigPayload, DeviceAction, StateChangedData, HubConfigEventData } from '@/generated'
 import {
   setConnected, setDevices, addRfPacket,
-  onDeviceUpserted, onDeviceRemoved, onStateChanged,
+  onDeviceUpserted, onDeviceRemoved, onStateChanged, onHubConfig,
   devices,
   type Device,
 } from './store'
@@ -52,13 +52,15 @@ export function initWs() {
       onDeviceUpserted(data)
     } else if (event === 'device_removed') {
       onDeviceRemoved(data)
+    } else if (event === 'hub_config') {
+      onHubConfig(data as HubConfigEventData)
     }
   }
 }
 
 // ─── Send helpers ───────────────────────────────────────────────────────────
 
-function send(payload: CmdPayload | RawPayload | UpsertDevicePayload | RemoveDevicePayload | RestartPayload) {
+function send(payload: CmdPayload | RawPayload | UpsertDevicePayload | RemoveDevicePayload | RestartPayload | SetHubConfigPayload) {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload))
   }
@@ -98,6 +100,10 @@ export function sendRemoveDevice(address: string, device_type: RemoveDevicePaylo
 
 export function sendRestart() {
   send({ type: 'restart' })
+}
+
+export function sendSetHubConfig(name: string) {
+  send({ type: 'set_hub_config', name })
 }
 
 export function sendCheckAll() {

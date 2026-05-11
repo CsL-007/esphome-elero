@@ -76,6 +76,10 @@ channels:
         $ref: "#/components/messages/removeDeviceMessage"
       restartMessage:
         $ref: "#/components/messages/restartMessage"
+      setHubConfigMessage:
+        $ref: "#/components/messages/setHubConfigMessage"
+      hubConfigEvent:
+        $ref: "#/components/messages/hubConfigEvent"
 
 operations:
   receiveConfig:
@@ -185,6 +189,27 @@ operations:
     messages:
       - $ref: "#/channels/eleroWs/messages/restartMessage"
 
+  sendSetHubConfig:
+    action: send
+    channel:
+      $ref: "#/channels/eleroWs"
+    summary: Update hub-level config (e.g., display name override)
+    description: |
+      Persists the hub display name to NVS. An empty `name` clears the override
+      and falls back to the YAML-configured default. Server broadcasts a
+      `hub_config` event with the effective name after applying.
+    messages:
+      - $ref: "#/channels/eleroWs/messages/setHubConfigMessage"
+
+  receiveHubConfig:
+    action: receive
+    channel:
+      $ref: "#/channels/eleroWs"
+    summary: Receive hub-config change notification
+    description: Broadcast when the hub display name override changes.
+    messages:
+      - $ref: "#/channels/eleroWs/messages/hubConfigEvent"
+
 components:
   messages:
     configEvent:
@@ -274,6 +299,22 @@ components:
       contentType: application/json
       payload:
         $ref: "#/components/schemas/RestartPayload"
+
+    setHubConfigMessage:
+      name: set_hub_config
+      title: Set Hub Config Message
+      summary: Update hub-level settings (display name override)
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/SetHubConfigPayload"
+
+    hubConfigEvent:
+      name: hub_config
+      title: Hub Config Event
+      summary: Hub-level config changed (e.g., display name)
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/HubConfigEventEnvelope"
 
   schemas:
     # ── Server → Client Envelopes ──
@@ -376,7 +417,7 @@ components:
     HubConfig:
       type: object
       additionalProperties: false
-      required: [device, version, mode, crud]
+      required: [device, version, mode, crud, name]
       description: Gateway identity and operating mode
       properties:
         device:
@@ -392,6 +433,13 @@ components:
         crud:
           type: boolean
           description: Whether CRUD operations (upsert_device, remove_device) are supported
+        name:
+          type: string
+          description: |
+            Hub display name shown in Home Assistant (gateway device block) and in the web UI.
+            Defaults to the YAML-configured value (`elero_mqtt.device_name`); can be overridden
+            at runtime and persisted to NVS via `set_hub_config`.
+          examples: ["Elero Gateway", "Living Room Hub"]
 
     RadioConfig:
       type: object
@@ -943,6 +991,46 @@ components:
         type:
           type: string
           const: restart
+
+    SetHubConfigPayload:
+      type: object
+      additionalProperties: false
+      required: [type, name]
+      description: |
+        Update hub-level settings. Currently only the display name override is
+        configurable. An empty `name` clears the override and falls back to the
+        YAML-configured default.
+      properties:
+        type:
+          type: string
+          const: set_hub_config
+        name:
+          type: string
+          description: New hub display name. Empty string clears the override.
+          maxLength: 31
+          examples: ["Living Room Hub"]
+
+    HubConfigEventEnvelope:
+      type: object
+      additionalProperties: false
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          const: hub_config
+        data:
+          $ref: "#/components/schemas/HubConfigEventData"
+
+    HubConfigEventData:
+      type: object
+      additionalProperties: false
+      required: [name]
+      description: Hub-level config snapshot after an update.
+      properties:
+        name:
+          type: string
+          description: Effective hub display name (override or YAML default).
+          examples: ["Elero Gateway"]
 
     # ── Shared Enums ──
 
