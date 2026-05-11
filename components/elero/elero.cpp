@@ -181,12 +181,19 @@ void Elero::setup() {
 
   // New architecture: device registry lifecycle
   if (this->registry_ != nullptr) {
-    // Setup all output adapters (MQTT, etc.) before restoring devices
-    this->registry_->setup_adapters();
-
-    // Restore NVS-persisted devices (MQTT/NVS modes)
+    // Load NVS-persisted state (devices + hub-level config) BEFORE adapters
+    // run setup(), so MqttAdapter sees the effective hub display name when
+    // it builds the gateway device block.
     if (this->registry_->is_nvs_enabled()) {
       this->registry_->init_preferences();
+    }
+
+    // Setup all output adapters (MQTT, etc.)
+    this->registry_->setup_adapters();
+
+    // Restore NVS-persisted devices (MQTT/NVS modes) — emits on_device_added
+    // notifications which the adapters are now ready to receive.
+    if (this->registry_->is_nvs_enabled()) {
       this->registry_->restore_all();
     }
   }

@@ -1,5 +1,5 @@
 import { signal } from '@preact/signals'
-import type { ConfigData, HubConfig, HubConfigEventData, RadioConfig, BlindConfig, LightConfig, RemoteConfig, DeviceUpsertedData, CrudEventData } from '@/generated'
+import type { ConfigData, HubConfig, RadioConfig, BlindConfig, LightConfig, RemoteConfig, DeviceUpsertedData, CrudEventData } from '@/generated'
 import type { RfPacketWithTimestamp } from '@/lib/protocol'
 
 export interface ServerConfig {
@@ -78,10 +78,6 @@ export function createHubModel() {
         }
         config.value = { ...prev, remotes: [...prev.remotes.filter(r => r.address !== data.address), remote] }
       }
-    },
-
-    applyHubConfig(data: HubConfigEventData) {
-      hubState.value = { ...hubState.value, name: data.name }
     },
 
     applyRemoved(data: CrudEventData) {
