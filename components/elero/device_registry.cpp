@@ -151,7 +151,7 @@ Device *DeviceRegistry::upsert(const NvsDeviceConfig &config) {
     notify_state_changed_(*slot, millis());
     ESP_LOGI(TAG, "Added %s '%s' at 0x%06x (slot %zu)",
              device_type_str(config.type), config.name,
-             config.dst_address, slot_index_(*slot));
+             config.dst_address, slot_index(*slot));
     return slot;
 }
 
@@ -164,7 +164,7 @@ bool DeviceRegistry::remove(uint32_t address, DeviceType type) {
 
     // Clear NVS (only when persistence is enabled)
     if (nvs_enabled_ && prefs_initialized_) {
-        size_t idx = slot_index_(*dev);
+        size_t idx = slot_index(*dev);
         NvsDeviceConfig empty{};
         empty.version = 0;  // Mark as invalid
         prefs_[idx].save(&empty);
@@ -196,13 +196,12 @@ Device *DeviceRegistry::find(uint32_t address) {
 // COMMAND DISPATCH
 // ═════════════════════════════════════════════════════════════════════════════
 
-void DeviceRegistry::command_cover(Device &dev, uint8_t cmd_byte, CommandSource src) {
+void DeviceRegistry::command_cover(Device &dev, uint8_t cmd_byte) {
     if (!dev.is_cover()) return;
 
     auto &cover = std::get<CoverDevice>(dev.logic);
     auto ctx = cover_context(dev.config);
     uint32_t now = millis();
-    cover.last_command_source = src;
 
     if (cmd_byte == packet::command::CHECK) {
         request_check(dev);
@@ -227,7 +226,7 @@ void DeviceRegistry::command_cover(Device &dev, uint8_t cmd_byte, CommandSource 
     notify_state_changed_(dev, now);
 }
 
-void DeviceRegistry::set_cover_position(Device &dev, float target, CommandSource src) {
+void DeviceRegistry::set_cover_position(Device &dev, float target) {
     if (!dev.is_cover()) return;
 
     auto &cover = std::get<CoverDevice>(dev.logic);
@@ -235,7 +234,6 @@ void DeviceRegistry::set_cover_position(Device &dev, float target, CommandSource
     if (!cover_sm::has_position_tracking(ctx)) return;
 
     uint32_t now = millis();
-    cover.last_command_source = src;
 
     uint8_t cmd;
     if (target >= cover_sm::POSITION_OPEN) {
@@ -259,13 +257,12 @@ void DeviceRegistry::set_cover_position(Device &dev, float target, CommandSource
     notify_state_changed_(dev, now);
 }
 
-void DeviceRegistry::command_cover_tilt(Device &dev, CommandSource src) {
+void DeviceRegistry::command_cover_tilt(Device &dev) {
     if (!dev.is_cover()) return;
 
     auto &cover = std::get<CoverDevice>(dev.logic);
     auto ctx = cover_context(dev.config);
     uint32_t now = millis();
-    cover.last_command_source = src;
 
     (void) dev.sender.enqueue(packet::command::TILT);
     (void) dev.sender.enqueue(packet::command::CHECK, packet::limits::CHECK_PACKETS, packet::msg_type::COMMAND);
@@ -275,13 +272,12 @@ void DeviceRegistry::command_cover_tilt(Device &dev, CommandSource src) {
     notify_state_changed_(dev, now);
 }
 
-void DeviceRegistry::command_light(Device &dev, uint8_t cmd_byte, CommandSource src) {
+void DeviceRegistry::command_light(Device &dev, uint8_t cmd_byte) {
     if (!dev.is_light()) return;
 
     auto &light = std::get<LightDevice>(dev.logic);
     auto ctx = light_context(dev.config);
     uint32_t now = millis();
-    light.last_command_source = src;
 
     if (cmd_byte == packet::command::CHECK) {
         request_check(dev);
@@ -302,13 +298,12 @@ void DeviceRegistry::command_light(Device &dev, uint8_t cmd_byte, CommandSource 
     notify_state_changed_(dev, now);
 }
 
-void DeviceRegistry::set_light_brightness(Device &dev, float brightness, CommandSource src) {
+void DeviceRegistry::set_light_brightness(Device &dev, float brightness) {
     if (!dev.is_light()) return;
 
     auto &light = std::get<LightDevice>(dev.logic);
     auto ctx = light_context(dev.config);
     uint32_t now = millis();
-    light.last_command_source = src;
 
     if (brightness <= 0.0f) {
         light.state = light_sm::on_turn_off(light.state);
@@ -331,8 +326,7 @@ void DeviceRegistry::set_light_brightness(Device &dev, float brightness, Command
     notify_state_changed_(dev, now);
 }
 
-void DeviceRegistry::command_group(Device *const *devices, size_t count, uint8_t cmd_byte,
-                                    CommandSource src) {
+void DeviceRegistry::command_group(Device *const *devices, size_t count, uint8_t cmd_byte) {
     if (count < 2 || count > packet::GROUP_MAX_DESTS || devices == nullptr) {
         ESP_LOGW(TAG, "command_group: invalid count %zu (need 2..%d)", count, packet::GROUP_MAX_DESTS);
         return;
@@ -378,7 +372,6 @@ void DeviceRegistry::command_group(Device *const *devices, size_t count, uint8_t
         if (!devices[i]->is_cover()) continue;
         auto &cover = std::get<CoverDevice>(devices[i]->logic);
         auto ctx = cover_context(devices[i]->config);
-        cover.last_command_source = src;
 
         if (cmd_byte == packet::command::STOP) {
             cover.state = cover_sm::on_command(cover.state, cmd_byte, now, ctx);
@@ -522,7 +515,7 @@ void DeviceRegistry::track_remote_(const RfPacketInfo &pkt, uint32_t now) {
     // Without this, every echo/retransmit of the first observed packet would fire
     // a full publish — see ELERO_GROUP_INVESTIGATION.md §8.1.
     notify_state_changed_(*slot, now);
-    ESP_LOGI(TAG, "Discovered remote 0x%06x (slot %zu)", pkt.src, slot_index_(*slot));
+    ESP_LOGI(TAG, "Discovered remote 0x%06x (slot %zu)", pkt.src, slot_index(*slot));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -600,7 +593,7 @@ void DeviceRegistry::loop_cover_(Device &dev, CoverDevice &cover, uint32_t now) 
     if (state_type_changed) {
         notify_state_changed_(dev, now);
     } else if (moving &&
-               (now - dev.last_notify_ms) >= packet::timing::PUBLISH_THROTTLE_MS) {
+               (now - dev.last_published_ms) >= packet::timing::PUBLISH_THROTTLE_MS) {
         // Throttled position updates during movement
         notify_state_changed_(dev, now);
     }
@@ -630,7 +623,7 @@ void DeviceRegistry::loop_light_(Device &dev, LightDevice &light, uint32_t now) 
     if (state_type_changed) {
         notify_state_changed_(dev, now);
     } else if (light_sm::is_dimming(light.state) &&
-               (now - dev.last_notify_ms) >= packet::timing::PUBLISH_THROTTLE_MS) {
+               (now - dev.last_published_ms) >= packet::timing::PUBLISH_THROTTLE_MS) {
         notify_state_changed_(dev, now);
     }
 }
@@ -666,7 +659,7 @@ void DeviceRegistry::persist(Device &dev, size_t slot_idx) {
 }
 
 void DeviceRegistry::persist(Device &dev) {
-    persist(dev, slot_index_(dev));
+    persist(dev, slot_index(dev));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -680,7 +673,7 @@ Device *DeviceRegistry::find_free_slot_() {
     return nullptr;
 }
 
-size_t DeviceRegistry::slot_index_(const Device &dev) const {
+size_t DeviceRegistry::slot_index(const Device &dev) const {
     return static_cast<size_t>(&dev - slots_.data());
 }
 
@@ -714,8 +707,7 @@ void DeviceRegistry::notify_state_changed_(Device &dev, uint32_t now) {
     ESP_LOGD(TAG, "0x%06x: publish [%s] (0x%04x)",
              dev.config.dst_address, state_change_str(changes), changes);
 
-    dev.last_changes = changes;
-    dev.last_notify_ms = now;
+    dev.last_published_ms = now;
     for (auto *a : adapters_) a->on_state_changed(dev, changes);
 }
 

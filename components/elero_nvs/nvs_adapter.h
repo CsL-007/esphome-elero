@@ -14,12 +14,14 @@
 #include "../elero/device_type.h"
 #include "../elero/esp_cover_shell.h"
 #include "../elero/esp_light_shell.h"
+#include "../elero/output_adapter.h"
 #include "esphome/components/light/light_state.h"
+#include <array>
 
 namespace esphome {
 namespace elero {
 
-class NvsAdapter : public Component {
+class NvsAdapter : public Component, public OutputAdapter {
  public:
   float get_setup_priority() const override {
     // After hub (DATA=600) which restores NVS devices,
@@ -28,6 +30,19 @@ class NvsAdapter : public Component {
   }
 
   void set_registry(DeviceRegistry *r) { registry_ = r; }
+
+  void setup(DeviceRegistry &registry) override { registry_ = &registry; }
+  void loop() override {}
+  void on_device_added(const Device &) override {}
+  void on_device_removed(const Device &) override {}
+  void on_state_changed(const Device &dev, uint16_t changes) override {
+    size_t idx = registry_->slot_index(dev);
+    if (dev.is_cover() && cover_shells_[idx] != nullptr) {
+      cover_shells_[idx]->sync_and_publish(changes);
+    } else if (dev.is_light() && light_shells_[idx] != nullptr) {
+      light_shells_[idx]->sync_and_publish(changes);
+    }
+  }
 
   void setup() override {
     if (!registry_) return;
@@ -55,11 +70,9 @@ class NvsAdapter : public Component {
     auto *shell = new EspCoverShell();  // NOLINT — owned by App
     shell->set_name(dev->config.name);
     shell->set_registry(registry_);
-    shell->set_slot_index(static_cast<int>(slot_index));
-    shell->set_open_duration(dev->config.open_duration_ms);
-    shell->set_close_duration(dev->config.close_duration_ms);
-    shell->set_supports_tilt(dev->config.supports_tilt);
+    shell->set_device(dev);
 
+    cover_shells_[slot_index] = shell;
     App.register_cover(shell);
     App.register_component(shell);
   }
@@ -67,8 +80,7 @@ class NvsAdapter : public Component {
   void create_light_(Device *dev, size_t slot_index) {
     auto *output = new EspLightShell();  // NOLINT — owned by App
     output->set_registry(registry_);
-    output->set_slot_index(static_cast<int>(slot_index));
-    output->set_dim_duration(dev->config.dim_duration_ms);
+    output->set_device(dev);
 
     auto *state = new light::LightState(output);  // NOLINT — owned by App
     state->set_name(dev->config.name);
@@ -76,12 +88,15 @@ class NvsAdapter : public Component {
 
     output->set_light_state(state);
 
+    light_shells_[slot_index] = output;
     App.register_light(state);
     App.register_component(state);
     App.register_component(output);
   }
 
   DeviceRegistry *registry_{nullptr};
+  std::array<EspCoverShell *, DeviceRegistry::MAX_DEVICES> cover_shells_{};
+  std::array<EspLightShell *, DeviceRegistry::MAX_DEVICES> light_shells_{};
 };
 
 }  // namespace elero

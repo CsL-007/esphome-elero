@@ -171,7 +171,7 @@ After this RFC, the only way a user adds an Elero device is through the web UI (
   - Migration section linking to `docs/MIGRATION-yaml-to-nvs.md`.
 - `docs/CONFIGURATION.md` — strip cover/light platform docs; replace with "Adding devices" via UI/import.
 - `docs/INSTALLATION.md` — drop YAML device steps.
-- `CLAUDE.md`:
+- `AGENTS.md`:
   - Three Operating Modes table → Two Operating Modes.
   - Remove references to YAML-defined devices.
   - Add note: backup/restore is the supported recovery path.
@@ -255,7 +255,7 @@ Server-side import:
 | AsyncAPI | `asyncapi.yaml` | 2 new messages, 4 new schemas |
 | Frontend | `hub-panel.tsx`, `store.ts`, `ws.ts`, `models/hub.ts` | UI + actions |
 | Tests | `common.yaml`, all `test.esp32-*.yaml`, `tests/python/*.py`, `tests/unit/test_device_registry.cpp` | rewrites + new round-trip tests |
-| Docs | `README.md`, `docs/CONFIGURATION.md`, `docs/INSTALLATION.md`, `CLAUDE.md`, `example.yaml`, new `docs/MIGRATION-yaml-to-nvs.md` | content rewrites |
+| Docs | `README.md`, `docs/CONFIGURATION.md`, `docs/INSTALLATION.md`, `AGENTS.md`, `example.yaml`, new `docs/MIGRATION-yaml-to-nvs.md` | content rewrites |
 | Scripts | `scripts/migrate_yaml_to_json.py` (new) | one-shot migration |
 
 Rough size: ~600–900 lines added, ~500–800 deleted (after Phase 3).
@@ -324,7 +324,7 @@ This is the recommended commit sequence on `feat/backup-restore`:
 7. `chore!: remove YAML cover/light platforms` — Phase 3 (BREAKING)
 8. `chore!: drop HubMode::NATIVE and register_device` — Phase 3
 9. `test: rewrite compile tests for NVS-only` — Phase 4 tests
-10. `docs: rewrite README, CONFIGURATION, CLAUDE for NVS-only` — Phase 4 docs
+10. `docs: rewrite README, CONFIGURATION, AGENTS for NVS-only` — Phase 4 docs
 11. `chore: bump version to 0.11.0` — release-please will pick up the `!` markers
 
 Each commit should leave the project in a buildable + passing-tests state where possible. Commits 7–8 are necessarily breaking; mark them with `!` so release-please bumps the major.
@@ -346,4 +346,4 @@ Each commit should leave the project in a buildable + passing-tests state where 
 - AsyncAPI types are codegen'd via `pnpm generate:types` — always update the spec first, then regenerate.
 - Frontend pattern: `useSignalEffect` for syncing input drafts from server state (see `HubInfoCard` post-PR #48).
 - Build: `uv run esphome compile <yaml>`, not `esphome compile`. Unit tests: `cd tests/unit && cmake --build build && ctest --test-dir build`.
-- Branch convention used by automation: `claude/<session-id>`. This branch is named manually: `feat/backup-restore`.
+- Branch convention used by automation: `pi/<session-id>`. This branch is named manually: `feat/backup-restore`.

@@ -139,7 +139,7 @@ bool Sx1276Driver::load_and_transmit(const uint8_t *pkt_buf, size_t len) {
   }
 
   // Enter TX mode
-  this->RadioDriver::mode_ = RadioMode::TX;
+  this->RadioDriver::mode_.store(RadioMode::TX, std::memory_order_release);
   this->set_mode_(sx1276::MODE_TX);
 
   this->tx_in_progress_ = true;
@@ -204,7 +204,7 @@ void Sx1276Driver::abort_tx() {
 }
 
 bool Sx1276Driver::has_data() {
-  if (this->RadioDriver::mode_ != RadioMode::RX) return false;
+  if (this->RadioDriver::mode() != RadioMode::RX) return false;
   return this->rx_ready_ != nullptr && this->rx_ready_->load(std::memory_order_acquire);
 }
 
@@ -560,7 +560,7 @@ void Sx1276Driver::flush_fifo_() {
 }
 
 void Sx1276Driver::restore_rx_() {
-  this->RadioDriver::mode_ = RadioMode::RX;
+  this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);
   this->write_reg_(sx1276::REG_PAYLOAD_LENGTH, sx1276::RX_FIXED_LEN);
   this->set_dio_for_rx_();
   this->flush_fifo_();

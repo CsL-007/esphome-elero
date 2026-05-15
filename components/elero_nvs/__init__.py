@@ -2,13 +2,13 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.core import CORE
 
-from ..elero import CONF_ELERO_ID, CONF_REGISTRY_ID, DeviceRegistry, elero_ns
+from ..elero import CONF_ELERO_ID, CONF_REGISTRY_ID, DeviceRegistry, OutputAdapter, elero_ns
 
 DEPENDENCIES = ["elero"]
 AUTO_LOAD = ["json", "cover", "light"]
 CODEOWNERS = ["@manuschillerdev"]
 
-NvsAdapter = elero_ns.class_("NvsAdapter", cg.Component)
+NvsAdapter = elero_ns.class_("NvsAdapter", cg.Component, OutputAdapter)
 
 CONF_NVS_ADAPTER_ID = "nvs_adapter_id"
 
@@ -43,4 +43,5 @@ async def to_code(config):
 
         adapter = cg.new_Pvariable(config[CONF_NVS_ADAPTER_ID])
         cg.add(adapter.set_registry(registry))
+        cg.add(registry.add_adapter(adapter))
         await cg.register_component(adapter, config)

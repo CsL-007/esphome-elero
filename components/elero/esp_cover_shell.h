@@ -37,23 +37,16 @@ class EspCoverShell : public cover::Cover, public Component {
  public:
   float get_setup_priority() const override { return setup_priority::DATA - 1.0f; }
 
-  // ── Setup (called by NvsAdapter when binding to a registry slot) ──
+  // ── Binding (called by NvsAdapter at construction time) ──
   void set_registry(DeviceRegistry *r) { registry_ = r; }
-  void set_slot_index(int idx) { slot_index_ = idx; }
-  // The following pre-seed get_traits() fallbacks for the brief window
-  // between construction and setup() binding the registry slot. After
-  // setup() runs, traits read directly from device_->config.
-  void set_supports_tilt(bool v) { trait_hints_.supports_tilt = v ? 1 : 0; }
-  void set_open_duration(uint32_t v) { trait_hints_.open_duration_ms = v; }
-  void set_close_duration(uint32_t v) { trait_hints_.close_duration_ms = v; }
+  void set_device(Device *d) { device_ = d; }
 
-  // ── Sensor setters (all published from sync_and_publish_ via snapshot) ──
+  // ── Sensor setters (published from sync_and_publish via snapshot) ──
 #ifdef USE_SENSOR
   void set_rssi_sensor(sensor::Sensor *s) { rssi_sensor_ = s; }
 #endif
 #ifdef USE_TEXT_SENSOR
   void set_status_sensor(text_sensor::TextSensor *s) { status_sensor_ = s; }
-  void set_command_source_sensor(text_sensor::TextSensor *s) { command_source_sensor_ = s; }
   void set_problem_type_sensor(text_sensor::TextSensor *s) { problem_type_sensor_ = s; }
 #endif
 #ifdef USE_BINARY_SENSOR
@@ -65,37 +58,21 @@ class EspCoverShell : public cover::Cover, public Component {
 
   // ── ESPHome Component lifecycle ────────────────────────────
   void setup() override {
-    if (!registry_ || slot_index_ < 0) return;
-    device_ = registry_->slot(static_cast<size_t>(slot_index_));
 #ifdef USE_BUTTON
     if (refresh_button_ && device_) {
       refresh_button_->set_device(device_);
       refresh_button_->set_registry(registry_);
     }
 #endif
-  }
-
-  void loop() override {
-    if (!device_ || !device_->active) return;
-    // Initial publish: ensure HA doesn't show "Unknown" after boot
-    if (!initial_published_) {
-      initial_published_ = true;
-      sync_and_publish_(state_change::ALL);
-    }
-    // Publish when registry signals a state change (notify timestamp updated)
-    if (device_->last_notify_ms > last_published_ms_) {
-      sync_and_publish_(device_->last_changes);
-      last_published_ms_ = device_->last_notify_ms;
+    if (device_ && device_->active) {
+      sync_and_publish(state_change::ALL);
     }
   }
 
   // ── ESPHome Cover interface ────────────────────────────────
   cover::CoverTraits get_traits() override {
     auto traits = cover::CoverTraits();
-    // After setup() binds the slot, prefer the registry's authoritative config.
-    // Before binding (very early in boot) fall back to the trait hints supplied
-    // at construction time by NvsAdapter.
-    const auto &cfg = (device_ && device_->active) ? device_->config : trait_hints_;
+    const auto &cfg = device_->config;
     auto ctx = cover_context(cfg);
     traits.set_supports_position(cover_sm::has_position_tracking(ctx));
     traits.set_supports_tilt(cfg.supports_tilt != 0);
@@ -111,7 +88,6 @@ class EspCoverShell : public cover::Cover, public Component {
 
     if (call.get_stop()) {
       registry_->command_cover(*device_, packet::command::STOP);
-      sync_and_publish_(device_->last_changes);
       return;
     }
 
@@ -125,13 +101,11 @@ class EspCoverShell : public cover::Cover, public Component {
         uint8_t cmd = (target >= cover_sm::POSITION_OPEN) ? packet::command::UP : packet::command::DOWN;
         registry_->command_cover(*device_, cmd);
       }
-      sync_and_publish_(device_->last_changes);
       return;
     }
 
     if (call.get_tilt().has_value()) {
       registry_->command_cover_tilt(*device_);
-      sync_and_publish_(device_->last_changes);
       return;
     }
 
@@ -147,12 +121,11 @@ class EspCoverShell : public cover::Cover, public Component {
         cmd = (pos <= cover_sm::POSITION_CLOSED || was_closing) ? packet::command::UP : packet::command::DOWN;
       }
       registry_->command_cover(*device_, cmd);
-      sync_and_publish_(device_->last_changes);
     }
   }
 
- private:
-  void sync_and_publish_(uint16_t changes) {
+ public:
+  void sync_and_publish(uint16_t changes) {
     if (!device_ || !device_->is_cover()) return;
     const auto &pub = std::get<CoverDevice>(device_->logic).published;
 
@@ -180,8 +153,6 @@ class EspCoverShell : public cover::Cover, public Component {
 #ifdef USE_TEXT_SENSOR
     if ((changes & state_change::STATE_STRING) && status_sensor_ != nullptr)
       status_sensor_->publish_state(pub.state_string);
-    if ((changes & state_change::COMMAND_SOURCE) && command_source_sensor_ != nullptr)
-      command_source_sensor_->publish_state(pub.command_source);
     if ((changes & state_change::PROBLEM) && problem_type_sensor_ != nullptr)
       problem_type_sensor_->publish_state(pub.problem_type);
 #endif
@@ -191,19 +162,14 @@ class EspCoverShell : public cover::Cover, public Component {
 #endif
   }
 
-  NvsDeviceConfig trait_hints_{};       ///< Pre-binding fallback for get_traits()
   DeviceRegistry *registry_{nullptr};
   Device *device_{nullptr};
-  uint32_t last_published_ms_{0};
-  int slot_index_{-1};                  ///< Required: NVS slot bound in setup()
-  bool initial_published_{false};
 
 #ifdef USE_SENSOR
   sensor::Sensor *rssi_sensor_{nullptr};
 #endif
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *status_sensor_{nullptr};
-  text_sensor::TextSensor *command_source_sensor_{nullptr};
   text_sensor::TextSensor *problem_type_sensor_{nullptr};
 #endif
 #ifdef USE_BINARY_SENSOR

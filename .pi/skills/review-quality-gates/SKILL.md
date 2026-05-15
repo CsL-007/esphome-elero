@@ -1,6 +1,11 @@
-# Skill: Review Quality Gates
+---
+name: review-quality-gates
+description: Review checklist for embedded/component-based changes. Use before reviewing PRs, refactors, or new features to check lifecycle, interface design, separation of concerns, and debuggability.
+---
 
-**Trigger:** Invoke with `/review-quality-gates` before reviewing code — PRs, refactors, or new features. Applicable to any component-based embedded system.
+# Review Quality Gates
+
+**Trigger:** Invoke with `/skill:review-quality-gates` before reviewing code — PRs, refactors, or new features. Applicable to any component-based embedded system.
 
 **Purpose:** 14 quality gates distilled from real bugs and design flaws. Each gate maps to a concrete anti-pattern with a specific check action.
 
@@ -191,7 +196,7 @@ grep -rn "must.*before\|requires.*first\|call.*before\|reboot" components/ --inc
 
 ## How to use these gates
 
-1. **Before reviewing:** Invoke `/review-quality-gates` to load this checklist
+1. **Before reviewing:** Invoke `/skill:review-quality-gates` to load this checklist
 2. **During review:** Walk through each gate against the changed files
 3. **Prioritize:** Gates 1–4 (structural) catch the highest-severity bugs. Gates 13–14 (debuggability) catch the hardest-to-diagnose issues.
 4. **Automate what you can:** The `grep` commands above can be run directly to spot violations mechanically

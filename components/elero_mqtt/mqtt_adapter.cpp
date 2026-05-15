@@ -303,9 +303,8 @@ void MqttAdapter::publish_cover_state_(const Device &dev, uint16_t changes) {
         ++topics;
     }
 
-    if (changes & (state_change::COMMAND_SOURCE | state_change::PROBLEM | state_change::TILT)) {
+    if (changes & (state_change::PROBLEM | state_change::TILT)) {
         std::string attrs = json::build_json([&](JsonObject root) {
-            root["command_source"] = pub.command_source;
             root["tilted"] = pub.tilted;
             root["device_class"] = ha_cover_class_str(static_cast<HaCoverClass>(dev.config.ha_device_class));
             root["problem_type"] = pub.problem_type;
@@ -472,9 +471,8 @@ void MqttAdapter::publish_light_state_(const Device &dev, uint16_t changes) {
         ctx_.publish(DeviceType::LIGHT, addr, mqtt_topic::PROBLEM, pub.is_problem ? ha_state::ON : ha_state::OFF, false);
     }
 
-    if (changes & (state_change::COMMAND_SOURCE | state_change::PROBLEM)) {
+    if (changes & state_change::PROBLEM) {
         std::string attrs = json::build_json([&](JsonObject root) {
-            root["command_source"] = pub.command_source;
             root["problem_type"] = pub.problem_type;
         });
         ctx_.publish(DeviceType::LIGHT, addr, mqtt_topic::ATTRIBUTES, attrs, false);

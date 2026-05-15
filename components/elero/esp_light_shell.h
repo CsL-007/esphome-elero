@@ -31,14 +31,12 @@ class EspLightShell : public light::LightOutput, public Component {
  public:
   float get_setup_priority() const override { return setup_priority::DATA - 1.0f; }
 
-  // ── Setup (called by NvsAdapter when binding to a registry slot) ──
+  // ── Binding (called by NvsAdapter at construction time) ──
   void set_registry(DeviceRegistry *r) { registry_ = r; }
-  void set_slot_index(int idx) { slot_index_ = idx; }
+  void set_device(Device *d) { device_ = d; }
   void set_light_state(light::LightState *s) { light_state_ = s; }
-  // Pre-seeds get_traits() until setup() binds the registry slot.
-  void set_dim_duration(uint32_t v) { trait_hints_.dim_duration_ms = v; }
 
-  // ── Sensor setters (published from sync_and_publish_ via snapshot) ──
+  // ── Sensor setters (published from sync_and_publish via snapshot) ──
 #ifdef USE_SENSOR
   void set_rssi_sensor(sensor::Sensor *s) { rssi_sensor_ = s; }
 #endif
@@ -51,32 +49,21 @@ class EspLightShell : public light::LightOutput, public Component {
 
   // ── ESPHome Component lifecycle ────────────────────────────
   void setup() override {
-    if (!registry_ || slot_index_ < 0) return;
-    device_ = registry_->slot(static_cast<size_t>(slot_index_));
 #ifdef USE_BUTTON
     if (refresh_button_ && device_) {
       refresh_button_->set_device(device_);
       refresh_button_->set_registry(registry_);
     }
 #endif
-  }
-
-  void loop() override {
-    if (!device_ || !device_->active) return;
-    // No initial_published_ needed here — ESPHome LightState defaults to "off",
-    // which is a valid state. Covers need it because cover::Cover starts as "Unknown".
-    if (device_->last_notify_ms > last_published_ms_) {
-      sync_and_publish_(device_->last_changes);
-      last_published_ms_ = device_->last_notify_ms;
+    if (device_ && device_->active) {
+      sync_and_publish(state_change::ALL);
     }
   }
 
   // ── ESPHome Light interface ────────────────────────────────
   light::LightTraits get_traits() override {
     auto traits = light::LightTraits();
-    // Prefer the registry slot once bound; fall back to the construction-time
-    // hints from NvsAdapter for the brief pre-setup() window.
-    const auto &cfg = (device_ && device_->active) ? device_->config : trait_hints_;
+    const auto &cfg = device_->config;
     auto ctx = light_context(cfg);
     traits.set_supported_color_modes({
         light_sm::supports_brightness(ctx)
@@ -100,8 +87,7 @@ class EspLightShell : public light::LightOutput, public Component {
     }
   }
 
- private:
-  void sync_and_publish_(uint16_t changes) {
+  void sync_and_publish(uint16_t changes) {
     if (!device_ || !device_->is_light() || !light_state_) return;
     const auto &pub = std::get<LightDevice>(device_->logic).published;
 
@@ -127,13 +113,10 @@ class EspLightShell : public light::LightOutput, public Component {
 #endif
   }
 
-  NvsDeviceConfig trait_hints_{};
   DeviceRegistry *registry_{nullptr};
   Device *device_{nullptr};
   light::LightState *light_state_{nullptr};
-  uint32_t last_published_ms_{0};
   bool ignore_write_state_{false};
-  int slot_index_{-1};                  ///< Required: NVS slot bound in setup()
 
 #ifdef USE_SENSOR
   sensor::Sensor *rssi_sensor_{nullptr};

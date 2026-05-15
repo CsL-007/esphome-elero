@@ -642,7 +642,6 @@ TEST(DiffCoverTest, FirstDiff_DefaultPublished_ReturnsAllFlags) {
         .problem_type = "none",
         .rssi = -50.0f,
         .state_string = "bottom",
-        .command_source = "unknown",
         .device_class = "shutter",
     };
 
@@ -653,7 +652,6 @@ TEST(DiffCoverTest, FirstDiff_DefaultPublished_ReturnsAllFlags) {
     EXPECT_NE(changes & state_change::HA_STATE, 0);
     EXPECT_NE(changes & state_change::STATE_STRING, 0);
     EXPECT_NE(changes & state_change::RSSI, 0);
-    EXPECT_NE(changes & state_change::COMMAND_SOURCE, 0);
     EXPECT_NE(changes & state_change::PROBLEM, 0);
 }
 
@@ -661,14 +659,13 @@ TEST(DiffCoverTest, IdenticalSnapshot_ReturnsZero) {
     CoverDevice::Published pub{};
     CoverStateSnapshot snap{
         .position = 0.5f,
-        .ha_state = "stopped",
+        .ha_state = "open",
         .operation = cover_sm::Operation::IDLE,
         .tilted = false,
         .is_problem = false,
         .problem_type = "none",
         .rssi = -40.0f,
         .state_string = "intermediate",
-        .command_source = "hub",
         .device_class = "shutter",
     };
 
@@ -684,14 +681,13 @@ TEST(DiffCoverTest, SingleFieldChange_ReturnsOnlyThatFlag) {
     CoverDevice::Published pub{};
     CoverStateSnapshot snap{
         .position = 0.5f,
-        .ha_state = "stopped",
+        .ha_state = "open",
         .operation = cover_sm::Operation::IDLE,
         .tilted = false,
         .is_problem = false,
         .problem_type = "none",
         .rssi = -40.0f,
         .state_string = "intermediate",
-        .command_source = "hub",
         .device_class = "shutter",
     };
 
@@ -718,7 +714,6 @@ TEST(DiffCoverTest, RssiRounding_SameRounded_NoFlag) {
         .problem_type = "none",
         .rssi = -40.3f,
         .state_string = "bottom",
-        .command_source = "hub",
         .device_class = "shutter",
     };
 
@@ -741,14 +736,12 @@ TEST(DiffLightTest, FirstDiff_DefaultPublished_ReturnsAllFlags) {
         .problem_type = "none",
         .rssi = -50.0f,
         .state_string = "bottom",
-        .command_source = "unknown",
     };
 
     uint16_t changes = diff_and_update_light(snap, pub);
 
     EXPECT_NE(changes & state_change::RSSI, 0);
     EXPECT_NE(changes & state_change::STATE_STRING, 0);
-    EXPECT_NE(changes & state_change::COMMAND_SOURCE, 0);
     EXPECT_NE(changes & state_change::PROBLEM, 0);
 }
 
@@ -761,7 +754,6 @@ TEST(DiffLightTest, IdenticalSnapshot_ReturnsZero) {
         .problem_type = "none",
         .rssi = -45.0f,
         .state_string = "on",
-        .command_source = "hub",
     };
 
     diff_and_update_light(snap, pub);
@@ -779,7 +771,6 @@ TEST(DiffLightTest, BrightnessChange_ReturnsBrightnessFlag) {
         .problem_type = "none",
         .rssi = -45.0f,
         .state_string = "on",
-        .command_source = "hub",
     };
 
     diff_and_update_light(snap, pub);
@@ -962,19 +953,6 @@ TEST_F(DeviceRegistryTest, CommandGroup_RejectsLightDevice) {
 
     // Should reject — dev2 is not a cover
     EXPECT_TRUE(adapter_.state_changed.empty());
-}
-
-TEST_F(DeviceRegistryTest, CommandGroup_TracksCommandSource) {
-    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
-
-    Device *devs[] = {dev1, dev2};
-    registry_.command_group(devs, 2, pkt::command::UP, CommandSource::REMOTE);
-
-    auto &cover1 = std::get<CoverDevice>(dev1->logic);
-    auto &cover2 = std::get<CoverDevice>(dev2->logic);
-    EXPECT_EQ(cover1.last_command_source, CommandSource::REMOTE);
-    EXPECT_EQ(cover2.last_command_source, CommandSource::REMOTE);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

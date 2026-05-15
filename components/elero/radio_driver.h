@@ -66,7 +66,7 @@ class RadioDriver {
   }
 
   /// Current half-duplex mode. RX when idle, TX during transmission.
-  [[nodiscard]] RadioMode mode() const { return mode_; }
+  [[nodiscard]] RadioMode mode() const { return mode_.load(std::memory_order_acquire); }
 
   /// True if the radio has exhausted recovery attempts and is permanently failed.
   [[nodiscard]] bool failed() const { return failed_; }
@@ -134,7 +134,7 @@ class RadioDriver {
   virtual bool irq_rising_edge() const { return false; }  // CC1101 default
 
  protected:
-  RadioMode mode_{RadioMode::RX};
+  std::atomic<RadioMode> mode_{RadioMode::RX};
   bool failed_{false};                    ///< Set when recovery is exhausted
   std::atomic<bool> *rx_ready_{nullptr};  ///< ISR sets when RX packet available
   std::atomic<bool> *tx_done_{nullptr};   ///< ISR sets when TX transmission complete
