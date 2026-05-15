@@ -41,4 +41,4 @@ interface LearnInStartPayload {
    */
   'session_timeout_ms'?: number;
 }
-export { LearnInStartPayload };
+export type { LearnInStartPayload };

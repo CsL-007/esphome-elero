@@ -147,6 +147,7 @@ export const hub = signal<HubConfig>({
   mode: 'native',
   crud: false,
   name: '',
+  default_src_address: '0x000001',
 })
 
 export const radio = signal<RadioConfig>({

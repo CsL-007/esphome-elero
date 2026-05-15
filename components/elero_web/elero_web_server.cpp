@@ -8,6 +8,9 @@
 #include "esphome/core/application.h"
 #include "esphome/components/logger/logger.h"
 #include "esphome/components/json/json_util.h"
+#ifdef USE_ESP32
+#include "esp_mac.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -20,6 +23,21 @@ static const char *const TAG = "elero.web";
 
 // Global instance pointer for Mongoose's C callback
 static EleroWebServer *g_server = nullptr;
+
+static uint32_t derive_default_virtual_remote_address() {
+#ifdef USE_ESP32
+  uint8_t mac[6] = {0};
+  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+    return 0x000001;
+  }
+  uint32_t addr = (static_cast<uint32_t>(mac[3]) << 16) |
+                  (static_cast<uint32_t>(mac[4]) << 8) |
+                  static_cast<uint32_t>(mac[5]);
+  return addr != 0 ? addr : 0x000001;
+#else
+  return 0x000001;
+#endif
+}
 
 /// Parse hex string ("0xNN" or decimal) to uint8_t, returning default if missing/null
 static uint8_t parse_hex_or(JsonObject root, const char *key, uint8_t def) {
@@ -448,6 +466,7 @@ std::string EleroWebServer::build_config_json() {
     // Assign std::string by value — ArduinoJson copies, so we don't depend on
     // the registry's std::string outliving the document.
     hub["name"] = registry ? registry->hub_display_name() : App.get_name();
+    hub["default_src_address"] = hex_str(derive_default_virtual_remote_address());
 
     // radio — RF hardware configuration and capabilities
     auto *drv = this->parent_->get_driver();
@@ -898,6 +917,9 @@ void EleroWebServer::handle_learn_in_start_(struct mg_connection *c, JsonObject 
 
   LearnInStartRequest request{};
   request.src_addr = parse_hex32(root, "src_address");
+  if (request.src_addr == 0) {
+    request.src_addr = derive_default_virtual_remote_address();
+  }
   request.channel = root["channel"] | 0;
   request.programming_cmd = parse_hex_or(root, "programming_cmd", packet::command::INVALID);
   request.packets = parse_hex_or(root, "packets", packet::button::PACKETS);

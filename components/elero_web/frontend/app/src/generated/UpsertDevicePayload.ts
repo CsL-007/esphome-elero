@@ -79,4 +79,4 @@ interface UpsertDevicePayload {
    */
   'supports_tilt'?: boolean;
 }
-export { UpsertDevicePayload };
+export type { UpsertDevicePayload };

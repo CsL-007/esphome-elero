@@ -64,4 +64,4 @@ interface DeviceUpsertedData {
    */
   'updated_at'?: number;
 }
-export { DeviceUpsertedData };
+export type { DeviceUpsertedData };

@@ -68,4 +68,4 @@ interface BlindConfig {
    */
   'last_seen'?: number;
 }
-export { BlindConfig };
+export type { BlindConfig };

@@ -1,5 +1,6 @@
 import { useComputed, useSignal } from '@preact/signals'
-import { learnIn, devices } from '@/store'
+import { useEffect } from 'preact/hooks'
+import { learnIn, devices, hub } from '@/store'
 import { sendLearnInStart, sendLearnInConfirmUp, sendLearnInConfirmDown, sendLearnInCancel } from '@/ws'
 import { cn } from '@/lib/utils'
 import { Card } from './ui/card'
@@ -21,10 +22,7 @@ function isValidHexAddress(value: string) {
   return /^0x[0-9a-fA-F]{6}$/.test(value)
 }
 
-function generateRandomAddress() {
-  const value = Math.floor(Math.random() * 0xffffff)
-  return `0x${value.toString(16).padStart(6, '0')}`
-}
+const FALLBACK_SRC_ADDRESS = '0x000001'
 
 function stateLabel(state: string) {
   return state.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
@@ -68,7 +66,9 @@ function StepRow({
 
 export function LearnInPanel() {
   const state = learnIn.value
-  const srcAddress = useSignal(state.src_address ?? generateRandomAddress())
+  const defaultSrcAddress = useComputed(() => hub.value.default_src_address || FALLBACK_SRC_ADDRESS)
+  const srcAddress = useSignal(state.src_address ?? defaultSrcAddress.value)
+  const appliedDefaultSrcAddress = useSignal(srcAddress.value)
   const channel = useSignal(state.channel ?? 1)
   const programmingCmd = useSignal(state.programming_cmd ?? '0x00')
   const packets = useSignal(3)
@@ -97,6 +97,20 @@ export function LearnInPanel() {
   const isBusy = state.busy
   const active = state.active
   const canStart = !active && !isBusy && formValid.value
+
+  useEffect(() => {
+    const next_default = state.src_address ?? defaultSrcAddress.value
+    if (state.src_address) {
+      srcAddress.value = state.src_address
+      appliedDefaultSrcAddress.value = state.src_address
+      return
+    }
+    if (!isValidHexAddress(srcAddress.value) ||
+        srcAddress.value === appliedDefaultSrcAddress.value) {
+      srcAddress.value = next_default
+    }
+    appliedDefaultSrcAddress.value = next_default
+  }, [state.src_address, defaultSrcAddress.value])
 
   const handleStart = () => {
     sendLearnInStart({
@@ -146,9 +160,12 @@ export function LearnInPanel() {
                   disabled={active}
                   className="font-mono"
                 />
-                <Button variant="secondary" onClick={() => { srcAddress.value = generateRandomAddress() }} disabled={active} className="shrink-0 px-3 text-xs">
+                <Button variant="secondary" onClick={() => {
+                  srcAddress.value = defaultSrcAddress.value
+                  appliedDefaultSrcAddress.value = defaultSrcAddress.value
+                }} disabled={active} className="shrink-0 px-3 text-xs">
                   <RotateCcw className="size-3.5" />
-                  New
+                  Default
                 </Button>
               </div>
               {remoteOptions.length > 0 && (
@@ -167,7 +184,7 @@ export function LearnInPanel() {
                   ))}
                 </select>
               )}
-              <p className="text-[11px] text-muted-foreground">Use an existing remote address or generate a new virtual one.</p>
+              <p className="text-[11px] text-muted-foreground">Defaults to a deterministic hub-derived virtual remote address; you can still override it or pick an existing remote.</p>
             </div>
 
             <div className={fieldClass}>
