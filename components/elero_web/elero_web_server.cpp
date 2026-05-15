@@ -91,6 +91,33 @@ void EleroWebServer::loop() {
 
   // Clean up disconnected WebSocket clients
   this->ws_cleanup();
+
+  if (!this->enabled_ || this->ws_clients_.empty() || this->parent_ == nullptr) {
+    return;
+  }
+
+  const auto &learn_in = this->parent_->learn_in();
+  bool active = this->parent_->is_learn_in_active();
+  bool busy = learn_in.is_busy();
+  uint32_t src = learn_in.src_addr();
+  uint8_t channel = learn_in.channel();
+  uint8_t cmd = learn_in.programming_cmd();
+  LearnInState state = this->parent_->learn_in_state();
+
+  if (state != this->last_learn_in_state_ ||
+      active != this->last_learn_in_active_ ||
+      busy != this->last_learn_in_busy_ ||
+      src != this->last_learn_in_src_ ||
+      channel != this->last_learn_in_channel_ ||
+      cmd != this->last_learn_in_cmd_) {
+    this->last_learn_in_state_ = state;
+    this->last_learn_in_active_ = active;
+    this->last_learn_in_busy_ = busy;
+    this->last_learn_in_src_ = src;
+    this->last_learn_in_channel_ = channel;
+    this->last_learn_in_cmd_ = cmd;
+    this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
+  }
 }
 
 void EleroWebServer::dump_config() {
@@ -286,6 +313,7 @@ void EleroWebServer::handle_ws_upgrade(struct mg_connection *c, struct mg_http_m
   // Send config on connect
   if (this->enabled_) {
     this->ws_send(c, "config", this->build_config_json());
+    this->ws_send(c, "learn_in_state", this->build_learn_in_state_json_());
   }
 }
 
@@ -328,6 +356,10 @@ void EleroWebServer::handle_ws_message(struct mg_connection *c, struct mg_ws_mes
     if (type == "set_hub_config") { this->handle_set_hub_config_(c, root); return true; }
     if (type == "export_config") { this->handle_export_config_(c, root); return true; }
     if (type == "import_config") { this->handle_import_config_(c, root); return true; }
+    if (type == "learn_in_start") { this->handle_learn_in_start_(c, root); return true; }
+    if (type == "learn_in_confirm_up") { this->handle_learn_in_confirm_up_(c); return true; }
+    if (type == "learn_in_confirm_down") { this->handle_learn_in_confirm_down_(c); return true; }
+    if (type == "learn_in_cancel") { this->handle_learn_in_cancel_(c); return true; }
     if (type == "restart") { App.safe_reboot(); return true; }
 
     if (type == "raw") {
@@ -531,6 +563,26 @@ std::string EleroWebServer::build_device_upserted_json_(const Device &dev) {
     }
     if (dev.config.is_light()) {
       root["dim_ms"] = dev.config.dim_duration_ms;
+    }
+  });
+}
+
+std::string EleroWebServer::build_learn_in_state_json_() const {
+  if (this->parent_ == nullptr) {
+    return "{\"state\":\"idle\",\"active\":false,\"busy\":false}";
+  }
+
+  const auto &learn_in = this->parent_->learn_in();
+  return json::build_json([&](JsonObject root) {
+    root["state"] = learn_in_state_str(this->parent_->learn_in_state());
+    root["active"] = this->parent_->is_learn_in_active();
+    root["busy"] = learn_in.is_busy();
+    if (learn_in.src_addr() != 0) {
+      root["src_address"] = hex_str(learn_in.src_addr());
+      root["channel"] = learn_in.channel();
+    }
+    if (learn_in.programming_cmd() != packet::command::INVALID) {
+      root["programming_cmd"] = hex_str8(learn_in.programming_cmd());
     }
   });
 }
@@ -836,6 +888,53 @@ void EleroWebServer::handle_set_hub_config_(struct mg_connection *c, JsonObject 
   this->ws_broadcast("hub_config", json::build_json([&display_name](JsonObject r) {
     r["name"] = display_name;
   }));
+}
+
+void EleroWebServer::handle_learn_in_start_(struct mg_connection *c, JsonObject root) {
+  if (this->parent_ == nullptr) {
+    this->ws_send(c, "error", "{\"msg\":\"Hub unavailable\"}");
+    return;
+  }
+
+  LearnInStartRequest request{};
+  request.src_addr = parse_hex32(root, "src_address");
+  request.channel = root["channel"] | 0;
+  request.programming_cmd = parse_hex_or(root, "programming_cmd", packet::command::INVALID);
+  request.packets = parse_hex_or(root, "packets", packet::button::PACKETS);
+  request.type2 = parse_hex_or(root, "type2", packet::button::TYPE2);
+  request.hop = parse_hex_or(root, "hop", packet::button::HOP);
+  request.session_timeout_ms = root["session_timeout_ms"] | 300000;
+
+  if (!this->parent_->start_learn_in(request)) {
+    this->ws_send(c, "error", "{\"msg\":\"Failed to start learn-in\"}");
+    return;
+  }
+  this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
+}
+
+void EleroWebServer::handle_learn_in_confirm_up_(struct mg_connection *c) {
+  if (this->parent_ == nullptr || !this->parent_->confirm_learn_in_up()) {
+    this->ws_send(c, "error", "{\"msg\":\"Failed to confirm learn-in UP step\"}");
+    return;
+  }
+  this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
+}
+
+void EleroWebServer::handle_learn_in_confirm_down_(struct mg_connection *c) {
+  if (this->parent_ == nullptr || !this->parent_->confirm_learn_in_down()) {
+    this->ws_send(c, "error", "{\"msg\":\"Failed to confirm learn-in DOWN step\"}");
+    return;
+  }
+  this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
+}
+
+void EleroWebServer::handle_learn_in_cancel_(struct mg_connection *c) {
+  if (this->parent_ == nullptr) {
+    this->ws_send(c, "error", "{\"msg\":\"Hub unavailable\"}");
+    return;
+  }
+  this->parent_->cancel_learn_in();
+  this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
 }
 
 }  // namespace elero

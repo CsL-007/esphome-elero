@@ -52,12 +52,17 @@ void Elero::loop() {
     this->dispatch_packet(pkt);
   }
 
+  uint32_t now = millis();
+
   // 3. Registry loop (state machines, command queues, adapter loops)
   if (this->registry_ != nullptr) {
-    this->registry_->loop(millis());
+    this->registry_->loop(now);
   }
 
-  // 4. Publish RF stats sensors (throttled to every 30s)
+  // 4. Learn-in / provisioning loop (transport-agnostic RF primitives)
+  this->learn_in_.loop(now, this);
+
+  // 5. Publish RF stats sensors (throttled to every 30s)
   this->publish_stats_();
 #endif
 }

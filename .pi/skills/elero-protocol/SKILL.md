@@ -357,6 +357,71 @@ void generate_msg_stop(uint8_t* msg, uint8_t* remote_addr,
 3. **Stop command**: Single transmission is usually sufficient
 4. **Counter increment**: Increment counter after each logical command (press + release = 2 increments)
 
+---
+
+## Official Learn-In / Programming Procedure (elero manuals)
+
+The power-cycle learn-in flow is documented in official elero handheld transmitter manuals and should be treated as a product requirement, not folklore.
+
+### Affected transmitters
+
+- **TempoTel 2**
+  - Product page: https://www.elero.com/en/products/control-systems/tempotel-2/
+  - Manual PDF: https://www.elero.com/en/downloads-service/downloads/?tx_avelero_downloads%5Baction%5D=download&tx_avelero_downloads%5Bdownload%5D=324&cHash=19416ea19b003d4510544ed8c8638c8f
+- **VarioTel 2**
+  - Product page: https://www.elero.com/en/products/control-systems/variotel-2/
+  - Manual PDF: https://www.elero.com/en/downloads-service/downloads/?tx_avelero_downloads%5Baction%5D=download&tx_avelero_downloads%5Bdownload%5D=325&cHash=af753ee20fbd7a77ee897b17bf8f1830
+- **MonoTel 2**
+  - Product page: https://www.elero.com/en/products/control-systems/monotel-2/
+  - Manual PDF: https://www.elero.com/en/downloads-service/downloads/?tx_avelero_downloads%5Baction%5D=download&tx_avelero_downloads%5Bdownload%5D=320&cHash=2b5c961f89e27370f8023983cceef0c1
+
+### Manual-backed programming flow
+
+The manuals describe essentially the same learn-in sequence:
+
+1. **Power-cycle the installed receiver/motor**
+   - TempoTel 2: "switch the circuit breaker off and on again after a few seconds."
+   - VarioTel 2: "switch the circuit breaker off and on again after a few seconds."
+   - MonoTel 2: "switch the circuit breaker off and on again after a few seconds."
+2. **Receiver enters programming mode for about 5 minutes**
+3. **Press the transmitter programming button `P` briefly**
+4. The blind/curtain jogs to indicate programming mode
+5. Confirm learn-in with **UP** when movement starts upward
+6. Confirm learn-in with **DOWN** when movement starts downward
+
+### Architectural implications for esphome-elero
+
+- A learn-in feature should **not** be modeled as a normal cover/light runtime command (`command_cover`, `command_light`).
+- The C++ backend should expose **native learn-in primitives / domain APIs** that frontends can call.
+- The user-facing onboarding flow (power-cycle instructions, confirmation prompts, naming, save/apply) should live in the **web UI or Home Assistant**, not in the RF/backend layer.
+- The implementation should assume a roughly **5 minute programming window** after power restoration.
+- A single mains feed may power **multiple receivers**, and the manuals explicitly warn that they can all enter programming mode together after power is restored.
+- Therefore, UX and docs must warn users to isolate the intended motor where possible.
+
+### Recommended backend/frontend split
+
+**Backend (C++ core):**
+- Own RF/domain logic for learn-in
+- Expose transport-agnostic functions such as:
+  - send learn/programming `P` action
+  - confirm learn step `UP`
+  - confirm learn step `DOWN`
+  - cancel learn-in
+  - optionally observe/report pairing-window/session state
+- Keep this logic separate from normal configured-device command dispatch because learn-in may happen before a blind address is known
+
+**Frontend (Web UI / Home Assistant):**
+- Guide the user through mains power cycling
+- Explain timing and safety constraints
+- Trigger backend learn-in primitives in the right order
+- Handle onboarding UX, naming, persistence, and retries
+
+This keeps the backend reusable across multiple frontends while preserving the architecture rule that RF/business logic belongs in core C++ and UI flow belongs in adapters/clients.
+
+### Protocol note
+
+The manuals confirm the user-visible procedure, but they do **not** document the RF payload/command byte used by the `P` button. That packet sequence still must be determined empirically by sniffing real remote traffic.
+
 ```c
 // Example transmission sequence for DOWN
 for (int i = 0; i < 3; i++) {

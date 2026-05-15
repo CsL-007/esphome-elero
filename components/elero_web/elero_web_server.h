@@ -80,6 +80,7 @@ class EleroWebServer : public Component, public OutputAdapter, public logger::Lo
   std::string build_config_json();
   std::string build_rf_json(const RfPacketInfo &pkt);
   std::string build_device_upserted_json_(const Device &dev);
+  std::string build_learn_in_state_json_() const;
 
   // Device CRUD handlers (MQTT mode)
   void handle_upsert_device_(struct mg_connection *c, JsonObject root);
@@ -92,6 +93,12 @@ class EleroWebServer : public Component, public OutputAdapter, public logger::Lo
   void handle_export_config_(struct mg_connection *c, JsonObject root);
   void handle_import_config_(struct mg_connection *c, JsonObject root);
 
+  // Learn-in handlers
+  void handle_learn_in_start_(struct mg_connection *c, JsonObject root);
+  void handle_learn_in_confirm_up_(struct mg_connection *c);
+  void handle_learn_in_confirm_down_(struct mg_connection *c);
+  void handle_learn_in_cancel_(struct mg_connection *c);
+
   /// Serialize one device's NvsDeviceConfig into a `DeviceSnapshot` JSON object.
   void build_device_snapshot_(const NvsDeviceConfig &cfg, JsonObject out);
   /// Build the full `ConfigSnapshot` envelope for the current registry state.
@@ -103,6 +110,13 @@ class EleroWebServer : public Component, public OutputAdapter, public logger::Lo
 
   // Parse NvsDeviceConfig from JSON object
   bool parse_device_config_(JsonObject root, NvsDeviceConfig &config, std::string &error);
+
+  LearnInState last_learn_in_state_{LearnInState::IDLE};
+  bool last_learn_in_active_{false};
+  bool last_learn_in_busy_{false};
+  uint32_t last_learn_in_src_{0};
+  uint8_t last_learn_in_channel_{0};
+  uint8_t last_learn_in_cmd_{packet::command::INVALID};
 };
 
 }  // namespace elero

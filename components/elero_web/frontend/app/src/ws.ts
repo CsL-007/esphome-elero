@@ -1,8 +1,8 @@
-import type { CmdPayload, RawPayload, UpsertDevicePayload, RemoveDevicePayload, RestartPayload, SetHubConfigPayload, DeviceAction, StateChangedData, HubConfigEventData, ExportConfigPayload, ImportConfigPayload, ConfigSnapshot, ImportResult } from '@/generated'
+import type { CmdPayload, RawPayload, UpsertDevicePayload, RemoveDevicePayload, RestartPayload, SetHubConfigPayload, DeviceAction, StateChangedData, HubConfigEventData, ExportConfigPayload, ImportConfigPayload, ConfigSnapshot, ImportResult, LearnInStartPayload, LearnInConfirmUpPayload, LearnInConfirmDownPayload, LearnInCancelPayload, LearnInStateData } from '@/generated'
 import {
   setConnected, setDevices, addRfPacket,
   onDeviceUpserted, onDeviceRemoved, onStateChanged, onHubConfig,
-  onConfigSnapshot, onImportResult,
+  onConfigSnapshot, onImportResult, onLearnInState,
   devices,
   type Device,
 } from './store'
@@ -59,13 +59,15 @@ export function initWs() {
       onConfigSnapshot(data as ConfigSnapshot)
     } else if (event === 'import_result') {
       onImportResult(data as ImportResult)
+    } else if (event === 'learn_in_state') {
+      onLearnInState(data as LearnInStateData)
     }
   }
 }
 
 // ─── Send helpers ───────────────────────────────────────────────────────────
 
-function send(payload: CmdPayload | RawPayload | UpsertDevicePayload | RemoveDevicePayload | RestartPayload | SetHubConfigPayload | ExportConfigPayload | ImportConfigPayload) {
+function send(payload: CmdPayload | RawPayload | UpsertDevicePayload | RemoveDevicePayload | RestartPayload | SetHubConfigPayload | ExportConfigPayload | ImportConfigPayload | LearnInStartPayload | LearnInConfirmUpPayload | LearnInConfirmDownPayload | LearnInCancelPayload) {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload))
   }
@@ -125,4 +127,20 @@ export function sendCheckAll() {
       sendDeviceCommand(d, 'check')
     }
   }
+}
+
+export function sendLearnInStart(params: Omit<LearnInStartPayload, 'type'>) {
+  send({ type: 'learn_in_start', ...params })
+}
+
+export function sendLearnInConfirmUp() {
+  send({ type: 'learn_in_confirm_up' })
+}
+
+export function sendLearnInConfirmDown() {
+  send({ type: 'learn_in_confirm_down' })
+}
+
+export function sendLearnInCancel() {
+  send({ type: 'learn_in_cancel' })
 }

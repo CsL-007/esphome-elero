@@ -4,11 +4,11 @@ import type {
   StateChangedData, FreqConfig, HubMode, HubConfig, HubConfigEventData, RadioConfig,
   BlindConfig, LightConfig, RemoteConfig,
   RfStateName,
-  ConfigSnapshot, ImportResult,
+  ConfigSnapshot, ImportResult, LearnInStateData,
 } from '@/generated'
 
 // Re-export generated types used by components
-export type { RfData, DeviceType, BlindConfig, LightConfig, FreqConfig, HubMode, HubConfig, RadioConfig, CrudEventData, DeviceUpsertedData, StateChangedData, RfStateName }
+export type { RfData, DeviceType, BlindConfig, LightConfig, FreqConfig, HubMode, HubConfig, RadioConfig, CrudEventData, DeviceUpsertedData, StateChangedData, RfStateName, LearnInStateData }
 
 // ─── Protocol Constants (mirrors C++ packet:: namespace in elero_packet.h) ───
 
@@ -162,6 +162,12 @@ export const rfPackets = signal<RfPacketWithTimestamp[]>([])
 /// True when NVS config has changed and a reboot is needed to apply in HA (native mode)
 export const rebootNeeded = signal(false)
 
+export const learnIn = signal<LearnInStateData>({
+  state: 'idle',
+  active: false,
+  busy: false,
+})
+
 export type StatusFilter = 'all' | 'saved' | 'unsaved'
 export type DeviceTypeFilter = 'all' | 'covers' | 'lights'
 export type ActiveTab = 'devices' | 'packets' | 'hub'
@@ -304,6 +310,7 @@ export function setDevices(data: ConfigData) {
     devices.value = next
     hub.value = data.hub
     radio.value = data.radio
+    learnIn.value = { state: 'idle', active: false, busy: false }
   })
 }
 
@@ -413,6 +420,10 @@ export function onStateChanged(data: StateChangedData) {
 
 export function onHubConfig(data: HubConfigEventData) {
   hub.value = { ...hub.value, name: data.name }
+}
+
+export function onLearnInState(data: LearnInStateData) {
+  learnIn.value = data
 }
 
 // ─── Toast (one-shot user feedback) ─────────────────────────────────────────

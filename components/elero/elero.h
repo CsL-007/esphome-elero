@@ -9,6 +9,7 @@
 #include "elero_packet.h"
 #include "elero_strings.h"
 #include "device_type.h"
+#include "learn_in_manager.h"
 #include <string>
 #include <atomic>
 
@@ -116,6 +117,17 @@ class Elero : public Component {
                                       uint8_t type2 = packet::defaults::TYPE2,
                                       uint8_t hop = packet::defaults::HOP);
 
+  // Learn-in / provisioning primitives.
+  [[nodiscard]] bool start_learn_in(const LearnInStartRequest &request) {
+    return learn_in_.start(request);
+  }
+  [[nodiscard]] bool confirm_learn_in_up() { return learn_in_.confirm_up(); }
+  [[nodiscard]] bool confirm_learn_in_down() { return learn_in_.confirm_down(); }
+  void cancel_learn_in() { learn_in_.cancel(); }
+  [[nodiscard]] LearnInState learn_in_state() const { return learn_in_.state(); }
+  [[nodiscard]] bool is_learn_in_active() const { return learn_in_.is_active(); }
+  [[nodiscard]] const LearnInManager &learn_in() const { return learn_in_; }
+
 #ifdef USE_SENSOR
   void set_stats_tx_success_sensor(sensor::Sensor *s) { stats_tx_success_ = s; }
   void set_stats_tx_fail_sensor(sensor::Sensor *s) { stats_tx_fail_ = s; }
@@ -185,6 +197,7 @@ class Elero : public Component {
 
   // Unified device registry
   DeviceRegistry *registry_{nullptr};
+  LearnInManager learn_in_;
 
   const char *version_{"unknown"};
 

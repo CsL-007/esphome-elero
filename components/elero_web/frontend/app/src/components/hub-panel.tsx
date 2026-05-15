@@ -6,6 +6,7 @@ import { Button } from './ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip'
 import { Send, Info, Download, Upload } from './icons'
 import { RfPackets } from './rf-packets'
+import { LearnInPanel } from './learn-in-panel'
 import { cn } from '@/lib/utils'
 import { hub, radio, devices, filterCounts, parseFreq, showToast } from '@/store'
 import { sendRawCommand, sendSetHubConfig, sendExportConfig, sendImportConfig } from '@/ws'
@@ -691,6 +692,7 @@ export function HubPanel() {
     <div className="flex flex-col gap-6">
       <HubInfoCard />
       <BackupCard />
+      <LearnInPanel />
       <FrequencyCard />
       <RawTxCard />
       <RfPackets />
