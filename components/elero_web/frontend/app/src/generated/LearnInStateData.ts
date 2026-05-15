@@ -1,9 +1,11 @@
-import type { LearnInState } from './LearnInState';
-
+import {LearnInState} from './LearnInState';
 /**
  * Thin snapshot of the backend learn-in session.
  */
 interface LearnInStateData {
+  /**
+   * Backend learn-in session state.
+   */
   'state': LearnInState;
   /**
    * True while a learn-in session is logically in progress.

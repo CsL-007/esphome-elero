@@ -1,3 +1,8 @@
+
+/**
+ * Starts a backend learn-in session. The frontend must already have guided
+ * the user through the required power-cycle of the target motor.
+ */
 interface LearnInStartPayload {
   'type': 'learn_in_start';
   /**

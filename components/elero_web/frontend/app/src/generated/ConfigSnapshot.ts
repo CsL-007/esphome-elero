@@ -7,7 +7,9 @@ import {DeviceSnapshot} from './DeviceSnapshot';
  */
 interface ConfigSnapshot {
   /**
-   * Snapshot envelope version (currently 1).
+   * Snapshot envelope version (currently 1). Must match the C++
+   * `SNAPSHOT_VERSION` const in `components/elero_web/elero_web_server.cpp` —
+   * the import handler rejects any value it doesn't recognise.
    * @example 1
    */
   'snapshot_version': number;
