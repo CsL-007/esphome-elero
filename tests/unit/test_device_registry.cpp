@@ -221,11 +221,11 @@ class DeviceRegistryTest : public ::testing::Test {
     }
 
     Device *add_cover(uint32_t addr = 0xA831E5) {
-        return registry_.register_device(make_cover_config(addr));
+        return registry_.upsert(make_cover_config(addr));
     }
 
     Device *add_light(uint32_t addr = 0xC41A2B) {
-        return registry_.register_device(make_light_config(addr));
+        return registry_.upsert(make_light_config(addr));
     }
 };
 
@@ -233,10 +233,11 @@ class DeviceRegistryTest : public ::testing::Test {
 // CRUD — only non-trivial paths
 // ═══════════════════════════════════════════════════════════════════════════════
 
-TEST_F(DeviceRegistryTest, RegisterDuplicate_UpdatesConfigInPlace) {
+TEST_F(DeviceRegistryTest, UpsertDuplicate_UpdatesConfigInPlace) {
     auto *dev1 = add_cover(0xA831E5);
+    adapter_.clear();
     auto cfg2 = make_cover_config(0xA831E5, "Updated Cover");
-    auto *dev2 = registry_.register_device(cfg2);
+    auto *dev2 = registry_.upsert(cfg2);
     EXPECT_EQ(dev1, dev2);  // Same slot, not a new allocation
     EXPECT_STREQ(dev2->config.name, "Updated Cover");
     EXPECT_EQ(registry_.count_active(), 1u);
@@ -255,15 +256,9 @@ TEST_F(DeviceRegistryTest, Remove_NotifiesBeforeDeactivation) {
 
 TEST_F(DeviceRegistryTest, SlotExhaustion_ReturnsNull) {
     for (uint32_t i = 0; i < DeviceRegistry::MAX_DEVICES; ++i) {
-        ASSERT_NE(registry_.register_device(make_cover_config(0x100000 + i)), nullptr);
+        ASSERT_NE(registry_.upsert(make_cover_config(0x100000 + i)), nullptr);
     }
-    EXPECT_EQ(registry_.register_device(make_cover_config(0xFFFFFF)), nullptr);
-}
-
-TEST_F(DeviceRegistryTest, RegisterDevice_RejectsWhenNvsEnabled) {
-    registry_.set_nvs_enabled(true);
-    EXPECT_EQ(registry_.register_device(make_cover_config(0xA831E5)), nullptr);
-    EXPECT_EQ(registry_.count_active(), 0u);
+    EXPECT_EQ(registry_.upsert(make_cover_config(0xFFFFFF)), nullptr);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -374,7 +369,7 @@ TEST_F(DeviceRegistryTest, SetPosition_NoDurations_Rejected) {
     auto cfg = make_cover_config(0xA831E5);
     cfg.open_duration_ms = 0;
     cfg.close_duration_ms = 0;
-    auto *dev = registry_.register_device(cfg);
+    auto *dev = registry_.upsert(cfg);
     adapter_.clear();
 
     registry_.set_cover_position(*dev, 0.5f);
@@ -419,7 +414,7 @@ TEST_F(DeviceRegistryTest, SetBrightness_PartialStartsDimming) {
 TEST_F(DeviceRegistryTest, SetBrightness_NoDimSupport_InstantOn) {
     auto cfg = make_light_config(0xC41A2B);
     cfg.dim_duration_ms = 0;
-    auto *dev = registry_.register_device(cfg);
+    auto *dev = registry_.upsert(cfg);
 
     registry_.set_light_brightness(*dev, 0.5f);
 
@@ -512,16 +507,6 @@ TEST_F(DeviceRegistryTest, RfCommand_DiscoversRemoteEphemerally) {
     ASSERT_NE(remote, nullptr);
     // Ephemeral until user saves — updated_at stays 0 so MQTT adapter skips it
     EXPECT_EQ(remote->config.updated_at, 0u);
-}
-
-TEST_F(DeviceRegistryTest, RfCommand_NativeMode_NoDiscovery) {
-    // NVS disabled = native mode = devices come from YAML only
-    add_cover(0xA831E5);
-    adapter_.clear();
-
-    registry_.on_rf_packet(make_command_pkt(0xBBBBBB, 0xA831E5, pkt::command::UP),
-                           mock_time_.millis());
-    EXPECT_EQ(registry_.find(0xBBBBBB, DeviceType::REMOTE), nullptr);
 }
 
 TEST_F(DeviceRegistryTest, RfCommand_UpdatesExistingRemote) {
@@ -657,7 +642,6 @@ TEST(DiffCoverTest, FirstDiff_DefaultPublished_ReturnsAllFlags) {
         .problem_type = "none",
         .rssi = -50.0f,
         .state_string = "bottom",
-        .command_source = "unknown",
         .device_class = "shutter",
     };
 
@@ -668,7 +652,6 @@ TEST(DiffCoverTest, FirstDiff_DefaultPublished_ReturnsAllFlags) {
     EXPECT_NE(changes & state_change::HA_STATE, 0);
     EXPECT_NE(changes & state_change::STATE_STRING, 0);
     EXPECT_NE(changes & state_change::RSSI, 0);
-    EXPECT_NE(changes & state_change::COMMAND_SOURCE, 0);
     EXPECT_NE(changes & state_change::PROBLEM, 0);
 }
 
@@ -676,14 +659,13 @@ TEST(DiffCoverTest, IdenticalSnapshot_ReturnsZero) {
     CoverDevice::Published pub{};
     CoverStateSnapshot snap{
         .position = 0.5f,
-        .ha_state = "stopped",
+        .ha_state = "open",
         .operation = cover_sm::Operation::IDLE,
         .tilted = false,
         .is_problem = false,
         .problem_type = "none",
         .rssi = -40.0f,
         .state_string = "intermediate",
-        .command_source = "hub",
         .device_class = "shutter",
     };
 
@@ -699,14 +681,13 @@ TEST(DiffCoverTest, SingleFieldChange_ReturnsOnlyThatFlag) {
     CoverDevice::Published pub{};
     CoverStateSnapshot snap{
         .position = 0.5f,
-        .ha_state = "stopped",
+        .ha_state = "open",
         .operation = cover_sm::Operation::IDLE,
         .tilted = false,
         .is_problem = false,
         .problem_type = "none",
         .rssi = -40.0f,
         .state_string = "intermediate",
-        .command_source = "hub",
         .device_class = "shutter",
     };
 
@@ -733,7 +714,6 @@ TEST(DiffCoverTest, RssiRounding_SameRounded_NoFlag) {
         .problem_type = "none",
         .rssi = -40.3f,
         .state_string = "bottom",
-        .command_source = "hub",
         .device_class = "shutter",
     };
 
@@ -756,14 +736,12 @@ TEST(DiffLightTest, FirstDiff_DefaultPublished_ReturnsAllFlags) {
         .problem_type = "none",
         .rssi = -50.0f,
         .state_string = "bottom",
-        .command_source = "unknown",
     };
 
     uint16_t changes = diff_and_update_light(snap, pub);
 
     EXPECT_NE(changes & state_change::RSSI, 0);
     EXPECT_NE(changes & state_change::STATE_STRING, 0);
-    EXPECT_NE(changes & state_change::COMMAND_SOURCE, 0);
     EXPECT_NE(changes & state_change::PROBLEM, 0);
 }
 
@@ -776,7 +754,6 @@ TEST(DiffLightTest, IdenticalSnapshot_ReturnsZero) {
         .problem_type = "none",
         .rssi = -45.0f,
         .state_string = "on",
-        .command_source = "hub",
     };
 
     diff_and_update_light(snap, pub);
@@ -794,7 +771,6 @@ TEST(DiffLightTest, BrightnessChange_ReturnsBrightnessFlag) {
         .problem_type = "none",
         .rssi = -45.0f,
         .state_string = "on",
-        .command_source = "hub",
     };
 
     diff_and_update_light(snap, pub);
@@ -825,8 +801,8 @@ static NvsDeviceConfig make_cover_config_ch(uint32_t addr, uint8_t channel,
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_TwoCovers_EnqueuesAndNotifies) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
     ASSERT_NE(dev1, nullptr);
     ASSERT_NE(dev2, nullptr);
     adapter_.clear();
@@ -845,8 +821,8 @@ TEST_F(DeviceRegistryTest, CommandGroup_TwoCovers_EnqueuesAndNotifies) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_UpdatesFSMs) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
     adapter_.clear();
 
     Device *devs[] = {dev1, dev2};
@@ -862,8 +838,8 @@ TEST_F(DeviceRegistryTest, CommandGroup_UpdatesFSMs) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_StopClearsTarget) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
 
     // First start movement
     Device *devs[] = {dev1, dev2};
@@ -880,8 +856,8 @@ TEST_F(DeviceRegistryTest, CommandGroup_StopClearsTarget) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_SetsGroupFieldsOnLeadSender) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
 
     Device *devs[] = {dev1, dev2};
     registry_.command_group(devs, 2, pkt::command::UP);
@@ -891,6 +867,31 @@ TEST_F(DeviceRegistryTest, CommandGroup_SetsGroupFieldsOnLeadSender) {
     EXPECT_EQ(cmd.num_dests, 2);
     EXPECT_EQ(cmd.dest_channels[0], 1);
     EXPECT_EQ(cmd.dest_channels[1], 3);
+}
+
+TEST_F(DeviceRegistryTest, CommandGroup_EnqueueFailureRestoresTemplate) {
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
+    ASSERT_NE(dev1, nullptr);
+    ASSERT_NE(dev2, nullptr);
+
+    auto &cmd = dev1->sender.command();
+    cmd.num_dests = 7;
+    cmd.dest_channels[0] = 9;
+    cmd.dest_channels[1] = 11;
+
+    for (int i = 0; i < pkt::limits::MAX_COMMAND_QUEUE; ++i) {
+        uint8_t queued = (i % 2 == 0) ? pkt::command::UP : pkt::command::DOWN;
+        ASSERT_TRUE(dev1->sender.enqueue(queued));
+    }
+
+    Device *devs[] = {dev1, dev2};
+    registry_.command_group(devs, 2, pkt::command::STOP);
+
+    EXPECT_EQ(cmd.num_dests, 7);
+    EXPECT_EQ(cmd.dest_channels[0], 9);
+    EXPECT_EQ(cmd.dest_channels[1], 11);
+    EXPECT_EQ(dev2->sender.queue_size(), 0u);
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_NumDestsAutoCleared) {
@@ -939,7 +940,7 @@ TEST_F(DeviceRegistryTest, CommandGroup_NumDestsAutoCleared) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_RejectsCountBelow2) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
     adapter_.clear();
 
     Device *devs[] = {dev1};
@@ -956,8 +957,8 @@ TEST_F(DeviceRegistryTest, CommandGroup_RejectsNullDevices) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_RejectsMixedSrcAddress) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1, 0xF0D008));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3, 0xDEAD00));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1, 0xF0D008));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3, 0xDEAD00));
     adapter_.clear();
 
     Device *devs[] = {dev1, dev2};
@@ -968,7 +969,7 @@ TEST_F(DeviceRegistryTest, CommandGroup_RejectsMixedSrcAddress) {
 }
 
 TEST_F(DeviceRegistryTest, CommandGroup_RejectsLightDevice) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
     auto *dev2 = add_light(0xC41A2B);
     adapter_.clear();
 
@@ -977,19 +978,6 @@ TEST_F(DeviceRegistryTest, CommandGroup_RejectsLightDevice) {
 
     // Should reject — dev2 is not a cover
     EXPECT_TRUE(adapter_.state_changed.empty());
-}
-
-TEST_F(DeviceRegistryTest, CommandGroup_TracksCommandSource) {
-    auto *dev1 = registry_.register_device(make_cover_config_ch(0xA00001, 1));
-    auto *dev2 = registry_.register_device(make_cover_config_ch(0xA00002, 3));
-
-    Device *devs[] = {dev1, dev2};
-    registry_.command_group(devs, 2, pkt::command::UP, CommandSource::REMOTE);
-
-    auto &cover1 = std::get<CoverDevice>(dev1->logic);
-    auto &cover2 = std::get<CoverDevice>(dev2->logic);
-    EXPECT_EQ(cover1.last_command_source, CommandSource::REMOTE);
-    EXPECT_EQ(cover2.last_command_source, CommandSource::REMOTE);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1049,4 +1037,24 @@ TEST_F(DeviceRegistryTest, HubName_SetDefaultDoesNotOverrideExistingOverride) {
     // after init_preferences has already loaded the override from NVS).
     registry_.set_default_hub_name("Elero Gateway");
     EXPECT_EQ(registry_.hub_display_name(), "Living Room");
+}
+
+// hub_default_name() / has_hub_name_override() are used by export_config to
+// decide whether to include `hub.name_override` in the snapshot envelope.
+TEST_F(DeviceRegistryTest, HubName_DefaultNameAccessor) {
+    registry_.set_default_hub_name("Elero Gateway");
+    EXPECT_EQ(registry_.hub_default_name(), "Elero Gateway");
+    EXPECT_FALSE(registry_.has_hub_name_override());
+}
+
+TEST_F(DeviceRegistryTest, HubName_HasOverrideReflectsState) {
+    registry_.set_default_hub_name("Elero Gateway");
+    registry_.init_preferences();
+    EXPECT_FALSE(registry_.has_hub_name_override());
+
+    registry_.set_hub_name_override("Living Room");
+    EXPECT_TRUE(registry_.has_hub_name_override());
+
+    registry_.set_hub_name_override("");
+    EXPECT_FALSE(registry_.has_hub_name_override());
 }

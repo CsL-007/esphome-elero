@@ -32,9 +32,8 @@ constexpr uint16_t TILT           = 1 << 3;
 constexpr uint16_t PROBLEM        = 1 << 4;
 constexpr uint16_t RSSI           = 1 << 5;
 constexpr uint16_t STATE_STRING   = 1 << 6;
-constexpr uint16_t COMMAND_SOURCE = 1 << 7;
-constexpr uint16_t BRIGHTNESS     = 1 << 8;  ///< light: on/off or brightness changed
-constexpr uint16_t REMOTE_ACTIVITY = 1 << 9; ///< remote: command/target/channel changed
+constexpr uint16_t BRIGHTNESS     = 1 << 7;  ///< light: on/off or brightness changed
+constexpr uint16_t REMOTE_ACTIVITY = 1 << 8; ///< remote: command/target/channel changed
 constexpr uint16_t ALL            = 0xFFFF;   ///< Force-publish everything (reconnect, initial)
 }  // namespace state_change
 
@@ -51,7 +50,6 @@ struct CoverStateSnapshot {
     const char *problem_type;    ///< "blocking"/"overheated"/"timeout"/PROBLEM_TYPE_NONE
     float rssi;
     const char *state_string;    ///< Raw elero state name ("top", "moving_up", etc.)
-    const char *command_source;  ///< "hub"/"remote"/"unknown"
     const char *device_class;    ///< "shutter"/"blind"/"awning"/etc.
 
 #ifdef ELERO_HAS_JSON
@@ -71,7 +69,6 @@ struct LightStateSnapshot {
     const char *problem_type;
     float rssi;
     const char *state_string;
-    const char *command_source;
 
 #ifdef ELERO_HAS_JSON
     /// Write snapshot fields to a JSON object. Caller adds identity/config fields.

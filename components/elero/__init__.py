@@ -20,6 +20,7 @@ Sx1276Driver = elero_ns.class_("Sx1276Driver", spi.SPIDevice)
 
 # New architecture: unified device registry
 DeviceRegistry = elero_ns.class_("DeviceRegistry")
+OutputAdapter = elero_ns.class_("OutputAdapter")
 
 CONF_GDO0_PIN = "gdo0_pin"
 CONF_IRQ_PIN = "irq_pin"

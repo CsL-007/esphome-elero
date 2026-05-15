@@ -4,10 +4,11 @@ import type {
   StateChangedData, FreqConfig, HubMode, HubConfig, HubConfigEventData, RadioConfig,
   BlindConfig, LightConfig, RemoteConfig,
   RfStateName,
+  ConfigSnapshot, ImportResult, LearnInStateData,
 } from '@/generated'
 
 // Re-export generated types used by components
-export type { RfData, DeviceType, BlindConfig, LightConfig, FreqConfig, HubMode, HubConfig, RadioConfig, CrudEventData, DeviceUpsertedData, StateChangedData, RfStateName }
+export type { RfData, DeviceType, BlindConfig, LightConfig, FreqConfig, HubMode, HubConfig, RadioConfig, CrudEventData, DeviceUpsertedData, StateChangedData, RfStateName, LearnInStateData }
 
 // ─── Protocol Constants (mirrors C++ packet:: namespace in elero_packet.h) ───
 
@@ -158,8 +159,14 @@ export const devices = signal<Map<string, Device>>(new Map())
 
 export const rfPackets = signal<RfPacketWithTimestamp[]>([])
 
-/// True when NVS config has changed and a reboot is needed to apply in HA (native_nvs mode)
+/// True when NVS config has changed and a reboot is needed to apply in HA (native mode)
 export const rebootNeeded = signal(false)
+
+export const learnIn = signal<LearnInStateData>({
+  state: 'idle',
+  active: false,
+  busy: false,
+})
 
 export type StatusFilter = 'all' | 'saved' | 'unsaved'
 export type DeviceTypeFilter = 'all' | 'covers' | 'lights'
@@ -303,6 +310,7 @@ export function setDevices(data: ConfigData) {
     devices.value = next
     hub.value = data.hub
     radio.value = data.radio
+    learnIn.value = { state: 'idle', active: false, busy: false }
   })
 }
 
@@ -385,7 +393,7 @@ export function onDeviceUpserted(data: DeviceUpsertedData) {
 
   devices.value = next
 
-  if (hub.value.mode === 'native_nvs') {
+  if (hub.value.mode === 'native') {
     rebootNeeded.value = true
   }
 }
@@ -414,12 +422,77 @@ export function onHubConfig(data: HubConfigEventData) {
   hub.value = { ...hub.value, name: data.name }
 }
 
+export function onLearnInState(data: LearnInStateData) {
+  learnIn.value = data
+}
+
+// ─── Toast (one-shot user feedback) ─────────────────────────────────────────
+
+export type ToastVariant = 'info' | 'success' | 'error'
+export interface Toast {
+  id: number
+  variant: ToastVariant
+  message: string
+}
+
+export const toast = signal<Toast | null>(null)
+let nextToastId = 1
+
+export function showToast(variant: ToastVariant, message: string) {
+  toast.value = { id: nextToastId++, variant, message }
+}
+
+export function dismissToast() {
+  toast.value = null
+}
+
+// ─── Backup / Restore ───────────────────────────────────────────────────────
+
+function snapshotFilename(snap: ConfigSnapshot): string {
+  const device = snap.exporter?.device || hub.value.device || 'elero-gateway'
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
+  return `${device}-backup-${stamp}.json`
+}
+
+export function onConfigSnapshot(snap: ConfigSnapshot) {
+  // Trigger a download via Blob + anchor click
+  const json = JSON.stringify(snap, null, 2)
+  const blob = new Blob([json], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = snapshotFilename(snap)
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  showToast('success', `Backup downloaded (${snap.devices.length} device${snap.devices.length === 1 ? '' : 's'})`)
+}
+
+export function onImportResult(result: ImportResult) {
+  const total = result.added + result.updated + result.skipped
+  const parts: string[] = []
+  if (result.added > 0) parts.push(`${result.added} added`)
+  if (result.updated > 0) parts.push(`${result.updated} updated`)
+  if (result.skipped > 0) parts.push(`${result.skipped} skipped`)
+  if (result.hub_applied) parts.push('hub config restored')
+  const summary = parts.length > 0 ? parts.join(', ') : 'no changes'
+  if (result.errors.length > 0) {
+    const first = result.errors[0]
+    showToast('error', `Import: ${summary} — ${result.errors.length} error${result.errors.length === 1 ? '' : 's'} (e.g. #${first.index}: ${first.msg})`)
+  } else if (total === 0 && !result.hub_applied) {
+    showToast('info', 'Import: empty snapshot, nothing applied')
+  } else {
+    showToast('success', `Import: ${summary}`)
+  }
+}
+
 export function onDeviceRemoved({ address }: CrudEventData) {
   const next = new Map(devices.value)
   next.delete(address)
   devices.value = next
 
-  if (hub.value.mode === 'native_nvs') {
+  if (hub.value.mode === 'native') {
     rebootNeeded.value = true
   }
 }

@@ -17,7 +17,7 @@ export function DeviceGrid() {
 
   return (
     <div className="flex flex-col gap-4">
-      {rebootNeeded.value && hub.value.mode === 'native_nvs' && (
+      {rebootNeeded.value && hub.value.mode === 'native' && (
         <div className="flex items-center justify-between rounded-xl border border-orange-300 bg-orange-50 px-4 py-3 text-sm dark:border-orange-700 dark:bg-orange-950">
           <span className="text-orange-800 dark:text-orange-200">
             Reboot required for changes to take effect in Home Assistant

@@ -2,13 +2,13 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.core import CORE
 
-from ..elero import CONF_ELERO_ID, CONF_REGISTRY_ID, DeviceRegistry, elero_ns
+from ..elero import CONF_ELERO_ID, CONF_REGISTRY_ID, DeviceRegistry, OutputAdapter, elero_ns
 
 DEPENDENCIES = ["elero"]
 AUTO_LOAD = ["json", "cover", "light"]
 CODEOWNERS = ["@manuschillerdev"]
 
-NvsAdapter = elero_ns.class_("NvsAdapter", cg.Component)
+NvsAdapter = elero_ns.class_("NvsAdapter", cg.Component, OutputAdapter)
 
 CONF_NVS_ADAPTER_ID = "nvs_adapter_id"
 
@@ -30,11 +30,12 @@ async def to_code(config):
     # If elero_mqtt is loaded, it handles entity publishing via MQTT discovery.
     # Otherwise, create an NVS adapter that builds ESPHome entities from NVS at boot.
     if "elero_mqtt" not in CORE.loaded_integrations:
-        cg.add(registry.set_hub_mode(cg.RawExpression("elero::HubMode::NATIVE_NVS")))
+        cg.add(registry.set_hub_mode(cg.RawExpression("elero::HubMode::NATIVE")))
 
-        # Ensure cover/light framework is enabled — normally set by ESPHome when
-        # YAML cover:/light: blocks exist, but NVS mode creates entities at runtime.
-        # Entity counts are set to MAX_DEVICES since the actual count isn't known at codegen.
+        # Ensure cover/light framework is enabled — ESPHome normally sets these
+        # defines when it sees a `cover:`/`light:` block in YAML, but here entities
+        # are created at runtime from NVS. Counts are pre-sized to MAX_DEVICES
+        # since the actual count isn't known at codegen.
         cg.add_define("USE_COVER")
         cg.add_define("USE_LIGHT")
         cg.add_define("ESPHOME_ENTITY_COVER_COUNT", 48)
@@ -42,4 +43,5 @@ async def to_code(config):
 
         adapter = cg.new_Pvariable(config[CONF_NVS_ADAPTER_ID])
         cg.add(adapter.set_registry(registry))
+        cg.add(registry.add_adapter(adapter))
         await cg.register_component(adapter, config)

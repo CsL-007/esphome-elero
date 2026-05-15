@@ -29,6 +29,7 @@ set(ELERO_COVER_SM_SRC ${COMPONENTS_DIR}/elero/cover_sm.cpp)
 set(ELERO_LIGHT_SM_SRC ${COMPONENTS_DIR}/elero/light_sm.cpp)
 set(ELERO_STATE_SNAPSHOT_SRC ${COMPONENTS_DIR}/elero/state_snapshot.cpp)
 set(ELERO_REGISTRY_SRC ${COMPONENTS_DIR}/elero/device_registry.cpp)
+set(ELERO_LEARN_IN_SRC ${COMPONENTS_DIR}/elero/learn_in_manager.cpp)
 
 # Test executable: Real packet vectors (uses elero_packet.cpp)
 add_executable(test_packet_vectors
@@ -107,6 +108,7 @@ add_executable(test_device_registry
   ${ELERO_PACKET_SRC}
   ${ELERO_STRINGS_SRC}
   ${ELERO_TIME_PROVIDER_SRC}
+  ${ELERO_LEARN_IN_SRC}
 )
 target_compile_definitions(test_device_registry PRIVATE UNIT_TEST)
 target_link_libraries(test_device_registry GTest::gtest_main)
@@ -117,6 +119,15 @@ add_executable(test_group_packet
   ${ELERO_PACKET_SRC}
 )
 target_link_libraries(test_group_packet GTest::gtest_main)
+
+# Learn-in manager (provisioning TX flow)
+add_executable(test_learn_in_manager
+  test_learn_in_manager.cpp
+  ${ELERO_LEARN_IN_SRC}
+  ${ELERO_TIME_PROVIDER_SRC}
+)
+target_compile_definitions(test_learn_in_manager PRIVATE UNIT_TEST)
+target_link_libraries(test_learn_in_manager GTest::gtest_main)
 
 # CC1101-compatible CRC-16 and PN9 whitening (pure functions, used by SX1262/SX1276 drivers)
 add_executable(test_cc1101_compat
@@ -144,6 +155,7 @@ gtest_discover_tests(test_cover_sm)
 gtest_discover_tests(test_light_sm)
 gtest_discover_tests(test_poll_timer)
 gtest_discover_tests(test_group_packet)
+gtest_discover_tests(test_learn_in_manager)
 gtest_discover_tests(test_device_registry)
 
 # All test targets
@@ -152,7 +164,7 @@ set(ALL_TEST_TARGETS
   test_packet_vectors test_command_sender test_golden_vectors
   test_encryption_vectors test_parse_roundtrip test_string_functions
   test_cover_sm test_light_sm test_poll_timer
-  test_group_packet test_device_registry
+  test_group_packet test_learn_in_manager test_device_registry
 )
 
 # Combined target for running all tests

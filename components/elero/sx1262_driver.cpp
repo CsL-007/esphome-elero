@@ -483,7 +483,7 @@ bool Sx1262Driver::load_and_transmit(const uint8_t *pkt_buf, size_t len) {
   this->tx_in_progress_ = true;
   this->tx_start_ms_ = millis();
   this->tx_pending_success_ = false;
-  this->RadioDriver::mode_ = RadioMode::TX;
+  this->RadioDriver::mode_.store(RadioMode::TX, std::memory_order_release);
 
   return true;
 }
@@ -578,7 +578,7 @@ void Sx1262Driver::abort_tx() {
 }
 
 bool Sx1262Driver::has_data() {
-  if (this->RadioDriver::mode_ != RadioMode::RX) return false;
+  if (this->RadioDriver::mode() != RadioMode::RX) return false;
   return this->rx_ready_ != nullptr && this->rx_ready_->load(std::memory_order_acquire);
 }
 
@@ -752,7 +752,7 @@ void Sx1262Driver::recover() {
              this->resets_in_window_, RESETS_BEFORE_FAILED, chip_mode);
     this->reset();
     this->init();  // init() ends in set_rx_() which sets mode_ = RX
-    this->RadioDriver::mode_ = RadioMode::RX;  // explicit — don't depend on init() internals
+    this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);  // explicit — don't depend on init() internals
 
     // ── Level 3: Mark failed — radio is unrecoverable ─────────────────────
     if (this->resets_in_window_ >= RESETS_BEFORE_FAILED) {
@@ -906,7 +906,7 @@ void Sx1262Driver::set_rx_() {
   // Continuous RX (timeout = 0xFFFFFF)
   uint8_t timeout[3] = {0xFF, 0xFF, 0xFF};
   this->write_opcode_(sx1262::SET_RX, timeout, 3);
-  this->RadioDriver::mode_ = RadioMode::RX;
+  this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);
 }
 
 void Sx1262Driver::set_tx_() {

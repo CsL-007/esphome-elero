@@ -31,7 +31,6 @@ CoverStateSnapshot compute_cover_snapshot(const Device &dev, uint32_t now) {
         .problem_type = pt != nullptr ? pt : PROBLEM_TYPE_NONE,
         .rssi = dev.rf.last_rssi,
         .state_string = elero_state_to_string(dev.rf.last_state_raw),
-        .command_source = command_source_str(cover.last_command_source),
         .device_class = ha_cover_class_str(static_cast<HaCoverClass>(dev.config.ha_device_class)),
     };
 }
@@ -59,7 +58,6 @@ LightStateSnapshot compute_light_snapshot(const Device &dev, uint32_t now) {
         .problem_type = lpt != nullptr ? lpt : PROBLEM_TYPE_NONE,
         .rssi = dev.rf.last_rssi,
         .state_string = elero_state_to_string(dev.rf.last_state_raw),
-        .command_source = command_source_str(light.last_command_source),
     };
 }
 
@@ -76,7 +74,6 @@ void CoverStateSnapshot::to_json(JsonObject obj) const {
     obj["problem_type"] = problem_type;
     obj["rssi"] = round_rssi(rssi);
     obj["state"] = state_string;
-    obj["command_source"] = command_source;
     obj["device_class"] = device_class;
 }
 
@@ -87,7 +84,6 @@ void LightStateSnapshot::to_json(JsonObject obj) const {
     obj["problem_type"] = problem_type;
     obj["rssi"] = round_rssi(rssi);
     obj["state"] = state_string;
-    obj["command_source"] = command_source;
 }
 #endif  // ELERO_HAS_JSON
 
@@ -119,7 +115,6 @@ const char *state_change_str(uint16_t changes) {
     if (changes & state_change::PROBLEM)         append("PROB");
     if (changes & state_change::RSSI)            append("RSSI");
     if (changes & state_change::STATE_STRING)    append("STATE");
-    if (changes & state_change::COMMAND_SOURCE)  append("CMD");
     if (changes & state_change::BRIGHTNESS)      append("BRI");
     if (changes & state_change::REMOTE_ACTIVITY) append("REMOTE");
 
@@ -127,8 +122,8 @@ const char *state_change_str(uint16_t changes) {
 }
 
 uint16_t diff_and_update_cover(const CoverStateSnapshot &snap, CoverDevice::Published &pub) {
-    // Pointer comparison is intentional — all state/problem/command strings are
-    // compile-time string literals returned by pure functions (pointer identity = value identity).
+    // Pointer comparison is intentional — all state/problem strings are
+    // compile-time string literals returned by pure functions.
     uint16_t changes = 0;
 
     int pos_pct = static_cast<int>(snap.position * PERCENT_SCALE);
@@ -161,10 +156,6 @@ uint16_t diff_and_update_cover(const CoverStateSnapshot &snap, CoverDevice::Publ
     if (pub.rssi_rounded != rssi_int) {
         changes |= state_change::RSSI;
         pub.rssi_rounded = rssi_int;
-    }
-    if (pub.command_source != snap.command_source) {
-        changes |= state_change::COMMAND_SOURCE;
-        pub.command_source = snap.command_source;
     }
 
     return changes;
@@ -221,10 +212,6 @@ uint16_t diff_and_update_light(const LightStateSnapshot &snap, LightDevice::Publ
     if (pub.rssi_rounded != rssi_int) {
         changes |= state_change::RSSI;
         pub.rssi_rounded = rssi_int;
-    }
-    if (pub.command_source != snap.command_source) {
-        changes |= state_change::COMMAND_SOURCE;
-        pub.command_source = snap.command_source;
     }
 
     return changes;

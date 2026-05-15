@@ -66,10 +66,6 @@ class DeviceRegistry {
     /// Returns pointer to the device slot, or nullptr if no free slot.
     Device *upsert(const NvsDeviceConfig &config);
 
-    /// Add a device without NVS persistence (for YAML-defined devices).
-    /// Source of truth is YAML, not NVS.
-    Device *register_device(const NvsDeviceConfig &config);
-
     /// Remove a device by address and type. Returns true if found and removed.
     bool remove(uint32_t address, DeviceType type);
 
@@ -84,19 +80,19 @@ class DeviceRegistry {
     // ═════════════════════════════════════════════════════════════════════════
 
     /// Dispatch a command byte to a cover device (open/close/stop + FSM + enqueue + poll).
-    void command_cover(Device &dev, uint8_t cmd_byte, CommandSource src = CommandSource::HUB);
+    void command_cover(Device &dev, uint8_t cmd_byte);
 
     /// Set a cover's target position (0.0–1.0). Determines direction, sets target, starts movement.
-    void set_cover_position(Device &dev, float target, CommandSource src = CommandSource::HUB);
+    void set_cover_position(Device &dev, float target);
 
     /// Dispatch a tilt command to a cover device.
-    void command_cover_tilt(Device &dev, CommandSource src = CommandSource::HUB);
+    void command_cover_tilt(Device &dev);
 
     /// Dispatch a command byte to a light device (on/off + FSM + enqueue).
-    void command_light(Device &dev, uint8_t cmd_byte, CommandSource src = CommandSource::HUB);
+    void command_light(Device &dev, uint8_t cmd_byte);
 
     /// Set a light's target brightness (0.0–1.0). Determines dim direction, starts dimming.
-    void set_light_brightness(Device &dev, float brightness, CommandSource src = CommandSource::HUB);
+    void set_light_brightness(Device &dev, float brightness);
 
     /// Send a group command to multiple cover devices in a single 0x44 multi-dest packet.
     /// Each device's channel becomes a destination in the packet. All devices must share
@@ -104,9 +100,7 @@ class DeviceRegistry {
     /// @param devices Pointer to array of Device pointers (must be active covers)
     /// @param count Number of devices in the array
     /// @param cmd_byte Command byte (UP/DOWN/STOP/CHECK)
-    /// @param src CommandSource for state tracking
-    void command_group(Device *const *devices, size_t count, uint8_t cmd_byte,
-                       CommandSource src = CommandSource::HUB);
+    void command_group(Device *const *devices, size_t count, uint8_t cmd_byte);
 
     /// Request an immediate status CHECK for any device (cover or light).
     /// Enqueues a single CHECK packet — blind responds with current state.
@@ -157,6 +151,7 @@ class DeviceRegistry {
     // ═════════════════════════════════════════════════════════════════════════
 
     Device *slot(size_t idx) { return (idx < MAX_DEVICES) ? &slots_[idx] : nullptr; }
+    [[nodiscard]] size_t slot_index(const Device &dev) const;
     static constexpr size_t max_devices() { return MAX_DEVICES; }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -177,6 +172,13 @@ class DeviceRegistry {
     /// Used by the MQTT adapter for the HA gateway device block and by the web
     /// UI for display.
     [[nodiscard]] const std::string &hub_display_name() const { return hub_display_name_; }
+
+    /// YAML-configured default hub name (no NVS override applied).
+    [[nodiscard]] const std::string &hub_default_name() const { return hub_default_name_; }
+
+    /// True when the user has set a non-empty hub name override (i.e. the
+    /// effective display name differs from the YAML default).
+    [[nodiscard]] bool has_hub_name_override() const { return !hub_name_override_.empty(); }
 
     /// Default hub name (YAML-configured, fallback when no NVS override).
     void set_default_hub_name(const std::string &name);
@@ -207,12 +209,16 @@ class DeviceRegistry {
 
     // ── Internal helpers ──
     Device *find_free_slot_();
-    size_t slot_index_(const Device &dev) const;
     void notify_added_(const Device &dev);
     void notify_removed_(const Device &dev);
     void notify_state_changed_(Device &dev, uint32_t now);
     void notify_config_changed_(const Device &dev);
     void notify_rf_packet_(const RfPacketInfo &pkt);
+
+    [[nodiscard]] bool enqueue_or_warn_(Device &dev, uint8_t cmd_byte,
+                                        uint8_t packets, uint8_t type,
+                                        const char *context);
+    [[nodiscard]] bool enqueue_check_(Device &dev, const char *context);
 
     /// Process cover device loop (polling, timeouts, position, command queue).
     void loop_cover_(Device &dev, CoverDevice &cover, uint32_t now);

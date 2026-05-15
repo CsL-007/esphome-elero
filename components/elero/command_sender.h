@@ -44,7 +44,7 @@ class CommandSender : public TxClient {
         [[fallthrough]];
 
       case State::WAIT_DELAY:
-        if ((now - this->last_tx_time_) < packet::button::INTER_PACKET_MS) {
+        if (!this->time_reached_(now, this->next_attempt_ms_)) {
           return;
         }
 
@@ -89,7 +89,7 @@ class CommandSender : public TxClient {
             this->advance_queue_();
           } else {
             uint32_t backoff_ms = this->calculate_backoff_ms_();
-            this->last_tx_time_ = now + backoff_ms - packet::button::INTER_PACKET_MS;
+            this->next_attempt_ms_ = now + backoff_ms;
             this->state_ = State::WAIT_DELAY;
           }
         }
@@ -114,7 +114,8 @@ class CommandSender : public TxClient {
       return;
     }
 
-    this->last_tx_time_ = get_time_provider().millis();
+    uint32_t now = get_time_provider().millis();
+    this->last_tx_time_ = now;
 
     if (success) {
       this->send_retries_ = 0;
@@ -128,6 +129,7 @@ class CommandSender : public TxClient {
                  this->command_.payload[4], this->command_.dst_addr, this->send_packets_);
         this->advance_queue_();
       } else {
+        this->next_attempt_ms_ = now + packet::button::INTER_PACKET_MS;
         this->state_ = State::WAIT_DELAY;
       }
     } else {
@@ -142,7 +144,7 @@ class CommandSender : public TxClient {
       } else {
         uint32_t backoff_ms = this->calculate_backoff_ms_();
         ESP_LOGD(this->log_tag_, "Backoff %ums before retry", backoff_ms);
-        this->last_tx_time_ = get_time_provider().millis() + backoff_ms - packet::button::INTER_PACKET_MS;
+        this->next_attempt_ms_ = now + backoff_ms;
         this->state_ = State::WAIT_DELAY;
       }
     }
@@ -183,10 +185,12 @@ class CommandSender : public TxClient {
     this->send_packets_ = 0;
     this->send_retries_ = 0;
     this->last_tx_time_ = 0;
+    this->next_attempt_ms_ = 0;
 
     if (this->state_ == State::TX_PENDING) {
-      // Cancelled TX won't call advance_queue_, so bump the counter now
-      // to avoid the next command reusing the in-flight counter.
+      // Already-posted RF work cannot be retracted from the Core 0 TX queue.
+      // clear_queue() is therefore best-effort cancellation: the logical queue is
+      // cleared immediately and the eventual completion callback is ignored.
       this->increase_counter_();
       this->cancelled_ = true;
     } else {
@@ -202,6 +206,10 @@ class CommandSender : public TxClient {
   const EleroCommand &command() const { return this->command_; }
 
  private:
+  static bool time_reached_(uint32_t now, uint32_t deadline) {
+    return static_cast<int32_t>(now - deadline) >= 0;
+  }
+
   uint32_t calculate_backoff_ms_() const {
     uint8_t shift = (this->send_retries_ < 4) ? this->send_retries_ : 3;
     uint32_t backoff_ms = packet::button::INTER_PACKET_MS << shift;
@@ -217,6 +225,9 @@ class CommandSender : public TxClient {
     this->command_.num_dests = 0;  // Clear group fields after each command drains
     this->increase_counter_();
     this->state_ = this->command_queue_.empty() ? State::IDLE : State::WAIT_DELAY;
+    if (this->state_ == State::WAIT_DELAY) {
+      this->next_attempt_ms_ = this->last_tx_time_ + packet::button::INTER_PACKET_MS;
+    }
   }
 
   void increase_counter_() {
@@ -234,6 +245,7 @@ class CommandSender : public TxClient {
 
   State state_{State::IDLE};
   uint32_t last_tx_time_{0};
+  uint32_t next_attempt_ms_{packet::button::INTER_PACKET_MS};
   uint32_t tx_start_time_{0};
   uint8_t send_packets_{0};
   uint8_t send_retries_{0};

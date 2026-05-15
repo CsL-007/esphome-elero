@@ -91,6 +91,33 @@ void EleroWebServer::loop() {
 
   // Clean up disconnected WebSocket clients
   this->ws_cleanup();
+
+  if (!this->enabled_ || this->ws_clients_.empty() || this->parent_ == nullptr) {
+    return;
+  }
+
+  const auto &learn_in = this->parent_->learn_in();
+  bool active = this->parent_->is_learn_in_active();
+  bool busy = learn_in.is_busy();
+  uint32_t src = learn_in.src_addr();
+  uint8_t channel = learn_in.channel();
+  uint8_t cmd = learn_in.programming_cmd();
+  LearnInState state = this->parent_->learn_in_state();
+
+  if (state != this->last_learn_in_state_ ||
+      active != this->last_learn_in_active_ ||
+      busy != this->last_learn_in_busy_ ||
+      src != this->last_learn_in_src_ ||
+      channel != this->last_learn_in_channel_ ||
+      cmd != this->last_learn_in_cmd_) {
+    this->last_learn_in_state_ = state;
+    this->last_learn_in_active_ = active;
+    this->last_learn_in_busy_ = busy;
+    this->last_learn_in_src_ = src;
+    this->last_learn_in_channel_ = channel;
+    this->last_learn_in_cmd_ = cmd;
+    this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
+  }
 }
 
 void EleroWebServer::dump_config() {
@@ -286,6 +313,7 @@ void EleroWebServer::handle_ws_upgrade(struct mg_connection *c, struct mg_http_m
   // Send config on connect
   if (this->enabled_) {
     this->ws_send(c, "config", this->build_config_json());
+    this->ws_send(c, "learn_in_state", this->build_learn_in_state_json_());
   }
 }
 
@@ -326,6 +354,12 @@ void EleroWebServer::handle_ws_message(struct mg_connection *c, struct mg_ws_mes
     if (type == "upsert_device") { this->handle_upsert_device_(c, root); return true; }
     if (type == "remove_device") { this->handle_remove_device_(c, root); return true; }
     if (type == "set_hub_config") { this->handle_set_hub_config_(c, root); return true; }
+    if (type == "export_config") { this->handle_export_config_(c, root); return true; }
+    if (type == "import_config") { this->handle_import_config_(c, root); return true; }
+    if (type == "learn_in_start") { this->handle_learn_in_start_(c, root); return true; }
+    if (type == "learn_in_confirm_up") { this->handle_learn_in_confirm_up_(c); return true; }
+    if (type == "learn_in_confirm_down") { this->handle_learn_in_confirm_down_(c); return true; }
+    if (type == "learn_in_cancel") { this->handle_learn_in_cancel_(c); return true; }
     if (type == "restart") { App.safe_reboot(); return true; }
 
     if (type == "raw") {
@@ -533,6 +567,26 @@ std::string EleroWebServer::build_device_upserted_json_(const Device &dev) {
   });
 }
 
+std::string EleroWebServer::build_learn_in_state_json_() const {
+  if (this->parent_ == nullptr) {
+    return "{\"state\":\"idle\",\"active\":false,\"busy\":false}";
+  }
+
+  const auto &learn_in = this->parent_->learn_in();
+  return json::build_json([&](JsonObject root) {
+    root["state"] = learn_in_state_str(this->parent_->learn_in_state());
+    root["active"] = this->parent_->is_learn_in_active();
+    root["busy"] = learn_in.is_busy();
+    if (learn_in.src_addr() != 0) {
+      root["src_address"] = hex_str(learn_in.src_addr());
+      root["channel"] = learn_in.channel();
+    }
+    if (learn_in.programming_cmd() != packet::command::INVALID) {
+      root["programming_cmd"] = hex_str8(learn_in.programming_cmd());
+    }
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Device Config Parser (shared by save/update)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -607,7 +661,7 @@ bool EleroWebServer::parse_device_config_(JsonObject root, NvsDeviceConfig &conf
 void EleroWebServer::handle_upsert_device_(struct mg_connection *c, JsonObject root) {
   auto *registry = this->parent_->get_registry();
   if (registry == nullptr || !registry->is_nvs_enabled()) {
-    this->ws_send(c, "error", "{\"msg\":\"CRUD not supported in native mode\"}");
+    this->ws_send(c, "error", "{\"msg\":\"Device CRUD requires elero_nvs or elero_mqtt\"}");
     return;
   }
 
@@ -626,7 +680,7 @@ void EleroWebServer::handle_upsert_device_(struct mg_connection *c, JsonObject r
 void EleroWebServer::handle_remove_device_(struct mg_connection *c, JsonObject root) {
   auto *registry = this->parent_->get_registry();
   if (registry == nullptr || !registry->is_nvs_enabled()) {
-    this->ws_send(c, "error", "{\"msg\":\"CRUD not supported in native mode\"}");
+    this->ws_send(c, "error", "{\"msg\":\"Device CRUD requires elero_nvs or elero_mqtt\"}");
     return;
   }
 
@@ -647,6 +701,177 @@ void EleroWebServer::handle_remove_device_(struct mg_connection *c, JsonObject r
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Backup / Restore (export_config / import_config)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Bump in lockstep with the `snapshot_version` const in
+// frontend/app/asyncapi.yaml (`ConfigSnapshot.snapshot_version`).
+// A drift makes every import fail with "Unsupported snapshot_version".
+constexpr uint8_t SNAPSHOT_VERSION = 1;
+
+void EleroWebServer::build_device_snapshot_(const NvsDeviceConfig &cfg, JsonObject out) {
+  out["device_type"] = device_type_str(cfg.type);
+  out["dst_address"] = hex_str(cfg.dst_address);
+  out["name"] = cfg.name;
+  out["enabled"] = cfg.is_enabled();
+
+  if (!cfg.is_remote()) {
+    out["src_address"] = hex_str(cfg.src_address);
+    out["channel"] = cfg.channel;
+    out["hop"] = hex_str8(cfg.hop);
+    out["payload_1"] = hex_str8(cfg.payload_1);
+    out["payload_2"] = hex_str8(cfg.payload_2);
+    out["msg_type"] = hex_str8(cfg.type_byte);
+    out["type2"] = hex_str8(cfg.type2);
+  }
+  if (cfg.is_cover()) {
+    out["open_duration_ms"] = cfg.open_duration_ms;
+    out["close_duration_ms"] = cfg.close_duration_ms;
+    out["supports_tilt"] = cfg.supports_tilt != 0;
+    out["ha_device_class"] = cfg.ha_device_class;
+  }
+  if (cfg.is_light()) {
+    out["dim_duration_ms"] = cfg.dim_duration_ms;
+  }
+}
+
+std::string EleroWebServer::build_config_snapshot_json_() {
+  return json::build_json([this](JsonObject root) {
+    auto *registry = this->parent_->get_registry();
+
+    root["snapshot_version"] = SNAPSHOT_VERSION;
+    root["exported_at"] = millis();
+
+    JsonObject exporter = root["exporter"].to<JsonObject>();
+    exporter["device"] = App.get_name();
+    exporter["version"] = this->parent_->get_version();
+
+    JsonObject hub = root["hub"].to<JsonObject>();
+    // Only include the override if one is set; absence == "no override".
+    if (registry != nullptr) {
+      const std::string &display = registry->hub_display_name();
+      // We want the persisted *override*, not the effective name. The display
+      // name is override-or-default; if it equals the default, no override is set.
+      const std::string &def = registry->hub_default_name();
+      if (display != def) {
+        hub["name_override"] = display;
+      }
+    }
+
+    JsonArray devices = root["devices"].to<JsonArray>();
+    if (registry != nullptr) {
+      registry->for_each_active([&](const Device &dev) {
+        // Skip auto-discovered remotes that haven't been persisted yet.
+        if (dev.config.updated_at == 0) return;
+        JsonObject obj = devices.add<JsonObject>();
+        this->build_device_snapshot_(dev.config, obj);
+      });
+    }
+  });
+}
+
+void EleroWebServer::handle_export_config_(struct mg_connection *c, JsonObject /*root*/) {
+  std::string snapshot = this->build_config_snapshot_json_();
+  this->ws_send(c, "config_snapshot", snapshot);
+  ESP_LOGI(TAG, "Sent config snapshot (%zu bytes)", snapshot.size());
+}
+
+void EleroWebServer::handle_import_config_(struct mg_connection *c, JsonObject root) {
+  auto *registry = this->parent_->get_registry();
+  if (registry == nullptr || !registry->is_nvs_enabled()) {
+    this->ws_send(c, "error", "{\"msg\":\"Import requires elero_nvs or elero_mqtt\"}");
+    return;
+  }
+
+  if (!root["snapshot"].is<JsonObject>()) {
+    this->ws_send(c, "error", "{\"msg\":\"Missing 'snapshot' object\"}");
+    return;
+  }
+  JsonObject snap = root["snapshot"].as<JsonObject>();
+
+  uint32_t snap_version = snap["snapshot_version"] | 0;
+  if (snap_version != SNAPSHOT_VERSION) {
+    char buf[96];
+    snprintf(buf, sizeof(buf),
+             "{\"msg\":\"Unsupported snapshot_version %u (expected %u)\"}",
+             (unsigned) snap_version, (unsigned) SNAPSHOT_VERSION);
+    this->ws_send(c, "error", buf);
+    return;
+  }
+
+  uint32_t added = 0;
+  uint32_t updated = 0;
+  uint32_t skipped = 0;
+  bool hub_applied = false;
+
+  // Collect errors as a serialized JSON array (built incrementally to avoid
+  // building two ArduinoJson docs at once).
+  std::string errors_json = "[";
+  auto append_error = [&](int idx, const std::string &msg) {
+    if (errors_json.size() > 1) errors_json += ',';
+    std::string entry = json::build_json([&](JsonObject e) {
+      e["index"] = idx;
+      e["msg"] = msg;
+    });
+    errors_json += entry;
+  };
+
+  // Apply hub overrides (currently just name_override). set_hub_name_override
+  // returns false when the value matches what's already persisted — avoid
+  // claiming a no-op as a successful restore in the import_result toast.
+  if (snap["hub"].is<JsonObject>()) {
+    JsonObject hub_obj = snap["hub"].as<JsonObject>();
+    if (hub_obj["name_override"].is<const char *>()) {
+      const char *name = hub_obj["name_override"].as<const char *>();
+      hub_applied = registry->set_hub_name_override(name == nullptr ? "" : name);
+    }
+  }
+
+  // Apply each device through parse_device_config_ + upsert.
+  if (snap["devices"].is<JsonArray>()) {
+    JsonArray devs = snap["devices"].as<JsonArray>();
+    int idx = -1;
+    for (JsonVariant v : devs) {
+      ++idx;
+      if (!v.is<JsonObject>()) {
+        append_error(idx, "Device entry is not an object");
+        ++skipped;
+        continue;
+      }
+      JsonObject obj = v.as<JsonObject>();
+      NvsDeviceConfig cfg{};
+      std::string error;
+      if (!this->parse_device_config_(obj, cfg, error)) {
+        append_error(idx, error);
+        ++skipped;
+        continue;
+      }
+
+      bool was_existing = (registry->find(cfg.dst_address, cfg.type) != nullptr);
+      if (registry->upsert(cfg) == nullptr) {
+        append_error(idx, "No free slot");
+        ++skipped;
+        continue;
+      }
+      if (was_existing) ++updated; else ++added;
+    }
+  }
+
+  errors_json += "]";
+
+  std::string reply = json::build_json([&](JsonObject r) {
+    r["added"] = added;
+    r["updated"] = updated;
+    r["skipped"] = skipped;
+    r["hub_applied"] = hub_applied;
+    r["errors"] = serialized(errors_json);
+  });
+  this->ws_send(c, "import_result", reply);
+  ESP_LOGI(TAG, "Import: %u added, %u updated, %u skipped, hub_applied=%d",
+           (unsigned) added, (unsigned) updated, (unsigned) skipped, hub_applied);
+}
+
 void EleroWebServer::handle_set_hub_config_(struct mg_connection *c, JsonObject root) {
   auto *registry = this->parent_->get_registry();
   if (registry == nullptr) {
@@ -663,6 +888,53 @@ void EleroWebServer::handle_set_hub_config_(struct mg_connection *c, JsonObject 
   this->ws_broadcast("hub_config", json::build_json([&display_name](JsonObject r) {
     r["name"] = display_name;
   }));
+}
+
+void EleroWebServer::handle_learn_in_start_(struct mg_connection *c, JsonObject root) {
+  if (this->parent_ == nullptr) {
+    this->ws_send(c, "error", "{\"msg\":\"Hub unavailable\"}");
+    return;
+  }
+
+  LearnInStartRequest request{};
+  request.src_addr = parse_hex32(root, "src_address");
+  request.channel = root["channel"] | 0;
+  request.programming_cmd = parse_hex_or(root, "programming_cmd", packet::command::INVALID);
+  request.packets = parse_hex_or(root, "packets", packet::button::PACKETS);
+  request.type2 = parse_hex_or(root, "type2", packet::button::TYPE2);
+  request.hop = parse_hex_or(root, "hop", packet::button::HOP);
+  request.session_timeout_ms = root["session_timeout_ms"] | 300000;
+
+  if (!this->parent_->start_learn_in(request)) {
+    this->ws_send(c, "error", "{\"msg\":\"Failed to start learn-in\"}");
+    return;
+  }
+  this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
+}
+
+void EleroWebServer::handle_learn_in_confirm_up_(struct mg_connection *c) {
+  if (this->parent_ == nullptr || !this->parent_->confirm_learn_in_up()) {
+    this->ws_send(c, "error", "{\"msg\":\"Failed to confirm learn-in UP step\"}");
+    return;
+  }
+  this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
+}
+
+void EleroWebServer::handle_learn_in_confirm_down_(struct mg_connection *c) {
+  if (this->parent_ == nullptr || !this->parent_->confirm_learn_in_down()) {
+    this->ws_send(c, "error", "{\"msg\":\"Failed to confirm learn-in DOWN step\"}");
+    return;
+  }
+  this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
+}
+
+void EleroWebServer::handle_learn_in_cancel_(struct mg_connection *c) {
+  if (this->parent_ == nullptr) {
+    this->ws_send(c, "error", "{\"msg\":\"Hub unavailable\"}");
+    return;
+  }
+  this->parent_->cancel_learn_in();
+  this->ws_broadcast("learn_in_state", this->build_learn_in_state_json_());
 }
 
 }  // namespace elero

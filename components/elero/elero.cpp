@@ -32,13 +32,8 @@ void Elero::loop() {
 #ifdef USE_ESP32
   // ─── Core 1: Drain FreeRTOS queues from RF task, run ESPHome dispatch ──────
 
-  // 1. Drain decoded RX packets from RF task
-  RfPacketInfo pkt{};
-  while (xQueueReceive(this->rx_queue_handle_, &pkt, 0) == pdPASS) {
-    this->dispatch_packet(pkt);
-  }
-
-  // 2. Drain TX completion results and notify CommandSenders
+  // 1. Drain TX completion results first so CommandSender timeouts don't sit
+  // behind slow RX/logging work on the main loop.
   TxResult result{};
   while (xQueueReceive(this->tx_done_queue_handle_, &result, 0) == pdPASS) {
     if (result.success) {
@@ -51,12 +46,23 @@ void Elero::loop() {
     }
   }
 
-  // 3. Registry loop (state machines, command queues, adapter loops)
-  if (this->registry_ != nullptr) {
-    this->registry_->loop(millis());
+  // 2. Drain decoded RX packets from RF task
+  RfPacketInfo pkt{};
+  while (xQueueReceive(this->rx_queue_handle_, &pkt, 0) == pdPASS) {
+    this->dispatch_packet(pkt);
   }
 
-  // 4. Publish RF stats sensors (throttled to every 30s)
+  uint32_t now = millis();
+
+  // 3. Registry loop (state machines, command queues, adapter loops)
+  if (this->registry_ != nullptr) {
+    this->registry_->loop(now);
+  }
+
+  // 4. Learn-in / provisioning loop (transport-agnostic RF primitives)
+  this->learn_in_.loop(now, this);
+
+  // 5. Publish RF stats sensors (throttled to every 30s)
   this->publish_stats_();
 #endif
 }
@@ -200,9 +206,9 @@ void Elero::setup() {
 
 #ifdef USE_ESP32
   // ─── Create FreeRTOS queues and spawn RF task on Core 0 ────────────────────
-  this->rx_queue_handle_ = xQueueCreate(16, sizeof(RfPacketInfo));
+  this->rx_queue_handle_ = xQueueCreate(32, sizeof(RfPacketInfo));
   this->tx_queue_handle_ = xQueueCreate(8, sizeof(RfTaskRequest));
-  this->tx_done_queue_handle_ = xQueueCreate(4, sizeof(TxResult));
+  this->tx_done_queue_handle_ = xQueueCreate(8, sizeof(TxResult));
 
   if (this->rx_queue_handle_ == nullptr ||
       this->tx_queue_handle_ == nullptr ||
@@ -252,6 +258,12 @@ void Elero::rf_task_func_(void *arg) {
 
     uint32_t now = millis();
 
+    auto post_tx_done = [&](const TxResult &r) {
+      if (xQueueSend(self->tx_done_queue_handle_, &r, 0) != pdPASS) {
+        ESP_LOGE(TAG, "tx_done_queue full, dropping TX completion");
+      }
+    };
+
     // 1. Process TX requests from main loop (only when radio is idle)
     if (!tx_in_progress) {
       RfTaskRequest req{};
@@ -265,7 +277,7 @@ void Elero::rf_task_func_(void *arg) {
             } else {
               // load_and_transmit failed — report failure immediately
               TxResult r{req.client, false};
-              xQueueSend(self->tx_done_queue_handle_, &r, 0);
+              post_tx_done(r);
             }
             break;
 
@@ -274,7 +286,7 @@ void Elero::rf_task_func_(void *arg) {
             if (self->tx_owner_ != nullptr) {
               TxResult r{self->tx_owner_, false};
               self->tx_owner_ = nullptr;
-              xQueueSend(self->tx_done_queue_handle_, &r, 0);
+              post_tx_done(r);
               tx_in_progress = false;
             }
             self->rx_ready_.store(false, std::memory_order_release);
@@ -300,7 +312,7 @@ void Elero::rf_task_func_(void *arg) {
             TxResult r{self->tx_owner_, true};
             self->tx_owner_ = nullptr;
             tx_in_progress = false;
-            xQueueSend(self->tx_done_queue_handle_, &r, 0);
+            post_tx_done(r);
           }
           break;
         case TxPollResult::FAILED:
@@ -310,7 +322,7 @@ void Elero::rf_task_func_(void *arg) {
             TxResult r{self->tx_owner_, false};
             self->tx_owner_ = nullptr;
             tx_in_progress = false;
-            xQueueSend(self->tx_done_queue_handle_, &r, 0);
+            post_tx_done(r);
           }
           break;
       }
@@ -420,33 +432,8 @@ void Elero::build_tx_packet_(const EleroCommand &cmd) {
 
 bool Elero::request_tx(TxClient *client, const EleroCommand &cmd) {
 #ifdef USE_ESP32
-  // Look up device name for TX intent log (runs on Core 1, no SPI)
-  std::string blind_name;
-  if (this->registry_) {
-    Device *dev = this->registry_->find(cmd.dst_addr);
-    if (dev) {
-      blind_name = dev->config.name;
-    }
-  }
-
-  // JSON log for TX packet (no msg_tx_ reference — packet built on RF task)
-  if (!blind_name.empty()) {
-    ESP_LOGD(TAG_RF,
-             "{\"ts_ms\":%lu,\"dir\":\"tx\",\"blind\":\"%s\",\"cmd_name\":\"%s\",\"cnt\":%d,"
-             "\"type\":\"0x%02x\",\"type2\":\"0x%02x\",\"hop\":\"0x%02x\","
-             "\"channel\":%d,\"src\":\"0x%06x\",\"dst\":\"0x%06x\",\"command\":\"0x%02x\"}",
-             (unsigned long) millis(), blind_name.c_str(), elero_command_to_string(cmd.payload[4]),
-             cmd.counter, cmd.type, cmd.type2, cmd.hop,
-             cmd.channel, cmd.src_addr, cmd.dst_addr, cmd.payload[4]);
-  } else {
-    ESP_LOGD(TAG_RF,
-             "{\"ts_ms\":%lu,\"dir\":\"tx\",\"blind\":\"0x%06x\",\"cmd_name\":\"%s\",\"cnt\":%d,"
-             "\"type\":\"0x%02x\",\"type2\":\"0x%02x\",\"hop\":\"0x%02x\","
-             "\"channel\":%d,\"src\":\"0x%06x\",\"dst\":\"0x%06x\",\"command\":\"0x%02x\"}",
-             (unsigned long) millis(), cmd.dst_addr, elero_command_to_string(cmd.payload[4]),
-             cmd.counter, cmd.type, cmd.type2, cmd.hop,
-             cmd.channel, cmd.src_addr, cmd.dst_addr, cmd.payload[4]);
-  }
+  ESP_LOGV(TAG_RF, "TX dst=0x%06x src=0x%06x cmd=0x%02x type=0x%02x cnt=%u",
+           cmd.dst_addr, cmd.src_addr, cmd.payload[4], cmd.type, cmd.counter);
 
   // Post to RF task queue (non-blocking, no SPI)
   RfTaskRequest req{};
@@ -514,69 +501,8 @@ void Elero::dispatch_packet(const RfPacketInfo &pkt) {
   const int64_t dispatch_start_us = esp_timer_get_time();
 #endif
 
-  bool is_cmd = is_command_packet(pkt.type);
-  bool is_status_pkt = is_status_packet(pkt.type);
-  bool is_btn = is_button_packet(pkt.type);
-
-  // Look up device name: for status packets src is the blind, for commands dst is the blind
-  std::string blind_name;
-  uint32_t blind_addr = is_status_pkt ? pkt.src : pkt.dst;
-  if (this->registry_) {
-    Device *dev = this->registry_->find(blind_addr);
-    if (dev) {
-      blind_name = dev->config.name;
-    }
-  }
-
-  // JSON log: include only fields relevant to the packet type
-  char blind_buf[32];
-  if (!blind_name.empty()) {
-    snprintf(blind_buf, sizeof(blind_buf), "%s", blind_name.c_str());
-  } else {
-    snprintf(blind_buf, sizeof(blind_buf), "0x%06x", blind_addr);
-  }
-
-  if (is_status_pkt) {
-    ESP_LOGD(TAG_RF,
-             "{\"ts_ms\":%lu,\"dir\":\"rx\",\"blind\":\"%s\",\"state_name\":\"%s\","
-             "\"len\":%d,\"cnt\":%d,\"type\":\"0x%02x\",\"type2\":\"0x%02x\",\"hop\":\"0x%02x\","
-             "\"channel\":%d,\"src\":\"0x%06x\",\"dst\":\"0x%06x\",\"state\":\"0x%02x\","
-             "\"rssi\":%.1f,\"lqi\":%d,\"crc_ok\":%s}",
-             (unsigned long) pkt.timestamp_ms, blind_buf, elero_state_to_string(pkt.state),
-             pkt.raw_len - PACKET_TOTAL_OVERHEAD, pkt.cnt, pkt.type, pkt.type2, pkt.hop,
-             pkt.channel, pkt.src, pkt.dst, pkt.state,
-             pkt.rssi, pkt.lqi, pkt.crc_ok ? "true" : "false");
-  } else if (is_cmd) {
-    ESP_LOGD(TAG_RF,
-             "{\"ts_ms\":%lu,\"dir\":\"rx\",\"blind\":\"%s\",\"cmd_name\":\"%s\","
-             "\"len\":%d,\"cnt\":%d,\"type\":\"0x%02x\",\"type2\":\"0x%02x\",\"hop\":\"0x%02x\","
-             "\"channel\":%d,\"src\":\"0x%06x\",\"dst\":\"0x%06x\",\"command\":\"0x%02x\","
-             "\"rssi\":%.1f,\"lqi\":%d,\"crc_ok\":%s}",
-             (unsigned long) pkt.timestamp_ms, blind_buf, elero_command_to_string(pkt.command),
-             pkt.raw_len - PACKET_TOTAL_OVERHEAD, pkt.cnt, pkt.type, pkt.type2, pkt.hop,
-             pkt.channel, pkt.src, pkt.dst, pkt.command,
-             pkt.rssi, pkt.lqi, pkt.crc_ok ? "true" : "false");
-  } else if (is_btn) {
-    ESP_LOGD(TAG_RF,
-             "{\"ts_ms\":%lu,\"dir\":\"rx\",\"blind\":\"%s\",\"cmd_name\":\"%s\","
-             "\"len\":%d,\"cnt\":%d,\"type\":\"0x%02x\",\"type2\":\"0x%02x\",\"hop\":\"0x%02x\","
-             "\"channel\":%d,\"src\":\"0x%06x\",\"dst\":\"0x%06x\",\"command\":\"0x%02x\","
-             "\"rssi\":%.1f,\"lqi\":%d,\"crc_ok\":%s}",
-             (unsigned long) pkt.timestamp_ms, blind_buf, elero_command_to_string(pkt.command),
-             pkt.raw_len - PACKET_TOTAL_OVERHEAD, pkt.cnt, pkt.type, pkt.type2, pkt.hop,
-             pkt.channel, pkt.src, pkt.dst, pkt.command,
-             pkt.rssi, pkt.lqi, pkt.crc_ok ? "true" : "false");
-  } else {
-    ESP_LOGD(TAG_RF,
-             "{\"ts_ms\":%lu,\"dir\":\"rx\",\"blind\":\"%s\","
-             "\"len\":%d,\"cnt\":%d,\"type\":\"0x%02x\",\"type2\":\"0x%02x\",\"hop\":\"0x%02x\","
-             "\"channel\":%d,\"src\":\"0x%06x\",\"dst\":\"0x%06x\","
-             "\"rssi\":%.1f,\"lqi\":%d,\"crc_ok\":%s}",
-             (unsigned long) pkt.timestamp_ms, blind_buf,
-             pkt.raw_len - PACKET_TOTAL_OVERHEAD, pkt.cnt, pkt.type, pkt.type2, pkt.hop,
-             pkt.channel, pkt.src, pkt.dst,
-             pkt.rssi, pkt.lqi, pkt.crc_ok ? "true" : "false");
-  }
+  ESP_LOGV(TAG_RF, "RX src=0x%06x dst=0x%06x type=0x%02x cmd=0x%02x state=0x%02x cnt=%u",
+           pkt.src, pkt.dst, pkt.type, pkt.command, pkt.state, pkt.cnt);
 
   // Dispatch through unified device registry (state machines, adapters, observers)
   if (this->registry_ != nullptr) {
@@ -586,9 +512,6 @@ void Elero::dispatch_packet(const RfPacketInfo &pkt) {
 #ifdef USE_ESP32
   int64_t dispatch_us = esp_timer_get_time() - dispatch_start_us;
   int64_t queue_transit_us = (pkt.decoded_at_us > 0) ? (dispatch_start_us - pkt.decoded_at_us) : 0;
-  // Log timing: dispatch cost + queue transit (decode->dispatch latency)
-  ESP_LOGD(TAG, "dispatch: %lldus, queue_transit: %lldus (cnt=%d)",
-           dispatch_us, queue_transit_us, pkt.cnt);
 
   // Update stats counters (Core 1 only)
   this->stat_rx_packets_++;
