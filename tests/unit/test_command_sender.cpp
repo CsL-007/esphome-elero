@@ -239,17 +239,13 @@ TEST_F(CommandSenderTest, RetriesOnFailure) {
 TEST_F(CommandSenderTest, DropsCommandAfterMaxRetries) {
   sender_.enqueue(packet::command::UP);
 
-  // Fail more than packet::limits::SEND_RETRIES times
-  for (int i = 0; i <= packet::limits::SEND_RETRIES + 1; i++) {
-    mock_time_.advance(packet::button::INTER_PACKET_MS);
+  for (int i = 0; i <= packet::limits::SEND_RETRIES; ++i) {
+    mock_time_.advance(1000);
     sender_.process_queue(mock_time_.millis(), &mock_hub_, "test");
-
-    if (mock_hub_.pending_client != nullptr) {
-      mock_hub_.complete_tx(false);
-    }
+    ASSERT_NE(mock_hub_.pending_client, nullptr);
+    mock_hub_.complete_tx(false);
   }
 
-  // Should be idle now (command dropped)
   EXPECT_EQ(sender_.state(), CommandSender::State::IDLE);
   EXPECT_FALSE(sender_.has_pending_commands());
 }
@@ -387,19 +383,15 @@ TEST_F(CommandSenderTest, TimeoutInTxPending_TriggersRetry) {
 TEST_F(CommandSenderTest, TimeoutInTxPending_DropsAfterMaxRetries) {
   sender_.enqueue(packet::command::UP);
 
-  // Repeatedly timeout (never call on_tx_complete)
-  for (int i = 0; i <= packet::limits::SEND_RETRIES + 1; i++) {
-    mock_time_.advance(packet::button::INTER_PACKET_MS);
+  for (int i = 0; i <= packet::limits::SEND_RETRIES; ++i) {
+    mock_time_.advance(1000);
     sender_.process_queue(mock_time_.millis(), &mock_hub_, "test");
+    ASSERT_EQ(sender_.state(), CommandSender::State::TX_PENDING);
 
-    if (sender_.state() == CommandSender::State::TX_PENDING) {
-      // Simulate timeout
-      mock_time_.advance(CommandSender::TX_PENDING_TIMEOUT_MS + 1);
-      sender_.process_queue(mock_time_.millis(), &mock_hub_, "test");
-    }
+    mock_time_.advance(CommandSender::TX_PENDING_TIMEOUT_MS + 1);
+    sender_.process_queue(mock_time_.millis(), &mock_hub_, "test");
   }
 
-  // Should be idle (command dropped after max timeout retries)
   EXPECT_EQ(sender_.state(), CommandSender::State::IDLE);
   EXPECT_FALSE(sender_.has_pending_commands());
 }
@@ -773,6 +765,32 @@ TEST_F(CommandSenderTest, ExponentialBackoffIncreasesPerRetry) {
   mock_time_.advance(packet::button::INTER_PACKET_MS);
   sender_.process_queue(mock_time_.millis(), &mock_hub_, "test");
   EXPECT_EQ(sender_.state(), CommandSender::State::TX_PENDING);
+}
+
+TEST_F(CommandSenderTest, RetryBackoffHandlesMillisRollover) {
+  sender_.enqueue(packet::command::UP);
+  mock_time_.current_time = 0xFFFFFFF0u;
+
+  mock_time_.advance(25);
+  sender_.process_queue(mock_time_.millis(), &mock_hub_, "test");
+  EXPECT_EQ(sender_.state(), CommandSender::State::WAIT_DELAY);
+
+  mock_time_.advance(1);
+  sender_.process_queue(mock_time_.millis(), &mock_hub_, "test");
+  EXPECT_EQ(sender_.state(), CommandSender::State::TX_PENDING);
+  EXPECT_EQ(mock_hub_.recorded_requests.size(), 1u);
+
+  mock_hub_.complete_tx(false);  // schedules first retry after 20ms
+  EXPECT_EQ(sender_.state(), CommandSender::State::WAIT_DELAY);
+
+  mock_time_.advance(BACKOFF_RETRY_1 - 1);
+  sender_.process_queue(mock_time_.millis(), &mock_hub_, "test");
+  EXPECT_EQ(sender_.state(), CommandSender::State::WAIT_DELAY);
+
+  mock_time_.advance(1);  // wrap-safe deadline reached
+  sender_.process_queue(mock_time_.millis(), &mock_hub_, "test");
+  EXPECT_EQ(sender_.state(), CommandSender::State::TX_PENDING);
+  EXPECT_EQ(mock_hub_.recorded_requests.size(), 2u);
 }
 
 TEST_F(CommandSenderTest, SuccessResetsBackoff) {

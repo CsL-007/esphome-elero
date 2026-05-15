@@ -13,6 +13,24 @@ namespace esphome::elero {
 
 static const char *const TAG = "elero.registry";
 
+bool DeviceRegistry::enqueue_or_warn_(Device &dev, uint8_t cmd_byte,
+                                      uint8_t packets, uint8_t type,
+                                      const char *context) {
+    if (dev.sender.enqueue(cmd_byte, packets, type)) {
+        return true;
+    }
+
+    ESP_LOGW(TAG, "0x%06x: failed to enqueue %s cmd=0x%02x",
+             dev.config.dst_address, context, cmd_byte);
+    return false;
+}
+
+bool DeviceRegistry::enqueue_check_(Device &dev, const char *context) {
+    return enqueue_or_warn_(dev, packet::command::CHECK,
+                            packet::limits::CHECK_PACKETS,
+                            packet::msg_type::COMMAND, context);
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // LIFECYCLE
 // ═════════════════════════════════════════════════════════════════════════════
@@ -91,12 +109,12 @@ void DeviceRegistry::restore_all() {
         if (dev.active) {
             notify_added_(dev);
             if (dev.is_cover()) {
-                (void) dev.sender.enqueue(packet::command::CHECK,
-                                          packet::limits::CHECK_PACKETS,
-                                          packet::msg_type::COMMAND);
+                bool queued = enqueue_check_(dev, "restore_all");
                 auto &cover = std::get<CoverDevice>(dev.logic);
                 cover.poll.offset_ms = cover_idx * packet::timing::POLL_OFFSET_SPACING;
-                cover.poll.on_poll_sent(now);
+                if (queued) {
+                    cover.poll.on_poll_sent(now);
+                }
                 ++cover_idx;
             }
         }
@@ -210,17 +228,23 @@ void DeviceRegistry::command_cover(Device &dev, uint8_t cmd_byte) {
 
     if (cmd_byte == packet::command::STOP) {
         dev.sender.clear_queue();
-        (void) dev.sender.enqueue(cmd_byte, packet::button::PACKETS, packet::msg_type::COMMAND);
-        (void) dev.sender.enqueue(packet::command::CHECK, packet::limits::CHECK_PACKETS, packet::msg_type::COMMAND);
+        (void) enqueue_or_warn_(dev, cmd_byte, packet::button::PACKETS,
+                                packet::msg_type::COMMAND,
+                                "command_cover(stop)");
+        (void) enqueue_check_(dev, "command_cover(stop)");
         cover.state = cover_sm::on_command(cover.state, cmd_byte, now, ctx);
         cover.target_position = cover_sm::NO_TARGET;
     } else {
         if (cmd_byte == packet::command::UP) cover.last_direction = cover_sm::Operation::OPENING;
         if (cmd_byte == packet::command::DOWN) cover.last_direction = cover_sm::Operation::CLOSING;
-        (void) dev.sender.enqueue(cmd_byte);
-        (void) dev.sender.enqueue(packet::command::CHECK, packet::limits::CHECK_PACKETS, packet::msg_type::COMMAND);
+        bool move_queued = enqueue_or_warn_(dev, cmd_byte, packet::button::PACKETS,
+                                            packet::msg_type::BUTTON,
+                                            "command_cover(move)");
+        (void) enqueue_check_(dev, "command_cover(move)");
         cover.state = cover_sm::on_command(cover.state, cmd_byte, now, ctx);
-        cover.poll.on_command_sent(now);
+        if (move_queued) {
+            cover.poll.on_command_sent(now);
+        }
     }
 
     notify_state_changed_(dev, now);
@@ -247,12 +271,16 @@ void DeviceRegistry::set_cover_position(Device &dev, float target) {
         cmd = (target > current) ? packet::command::UP : packet::command::DOWN;
         cover.target_position = target;
     }
-    (void) dev.sender.enqueue(cmd);
-    (void) dev.sender.enqueue(packet::command::CHECK, packet::limits::CHECK_PACKETS, packet::msg_type::COMMAND);
+    bool move_queued = enqueue_or_warn_(dev, cmd, packet::button::PACKETS,
+                                        packet::msg_type::BUTTON,
+                                        "set_cover_position");
+    (void) enqueue_check_(dev, "set_cover_position");
     cover.state = cover_sm::on_command(cover.state, cmd, now, ctx);
     if (cmd == packet::command::UP) cover.last_direction = cover_sm::Operation::OPENING;
     if (cmd == packet::command::DOWN) cover.last_direction = cover_sm::Operation::CLOSING;
-    cover.poll.on_command_sent(now);
+    if (move_queued) {
+        cover.poll.on_command_sent(now);
+    }
 
     notify_state_changed_(dev, now);
 }
@@ -264,10 +292,15 @@ void DeviceRegistry::command_cover_tilt(Device &dev) {
     auto ctx = cover_context(dev.config);
     uint32_t now = millis();
 
-    (void) dev.sender.enqueue(packet::command::TILT);
-    (void) dev.sender.enqueue(packet::command::CHECK, packet::limits::CHECK_PACKETS, packet::msg_type::COMMAND);
+    bool tilt_queued = enqueue_or_warn_(dev, packet::command::TILT,
+                                        packet::button::PACKETS,
+                                        packet::msg_type::BUTTON,
+                                        "command_cover_tilt");
+    (void) enqueue_check_(dev, "command_cover_tilt");
     cover.state = cover_sm::on_command(cover.state, packet::command::TILT, now, ctx);
-    cover.poll.on_command_sent(now);
+    if (tilt_queued) {
+        cover.poll.on_command_sent(now);
+    }
 
     notify_state_changed_(dev, now);
 }
@@ -287,12 +320,18 @@ void DeviceRegistry::command_light(Device &dev, uint8_t cmd_byte) {
     if (cmd_byte == packet::command::DOWN) {
         light.state = light_sm::on_turn_off(light.state);
         dev.sender.clear_queue();
-        (void) dev.sender.enqueue(cmd_byte);
+        (void) enqueue_or_warn_(dev, cmd_byte, packet::button::PACKETS,
+                                packet::msg_type::BUTTON,
+                                "command_light(off)");
     } else if (cmd_byte == packet::command::UP) {
         light.state = light_sm::on_turn_on(light.state, now, ctx);
-        (void) dev.sender.enqueue(cmd_byte);
+        (void) enqueue_or_warn_(dev, cmd_byte, packet::button::PACKETS,
+                                packet::msg_type::BUTTON,
+                                "command_light(on)");
     } else {
-        (void) dev.sender.enqueue(cmd_byte);
+        (void) enqueue_or_warn_(dev, cmd_byte, packet::button::PACKETS,
+                                packet::msg_type::BUTTON,
+                                "command_light(other)");
     }
 
     notify_state_changed_(dev, now);
@@ -308,18 +347,33 @@ void DeviceRegistry::set_light_brightness(Device &dev, float brightness) {
     if (brightness <= 0.0f) {
         light.state = light_sm::on_turn_off(light.state);
         dev.sender.clear_queue();
-        (void) dev.sender.enqueue(packet::command::DOWN);
+        (void) enqueue_or_warn_(dev, packet::command::DOWN,
+                                packet::button::PACKETS,
+                                packet::msg_type::BUTTON,
+                                "set_light_brightness(off)");
     } else if (!light_sm::supports_brightness(ctx)) {
         light.state = light_sm::on_turn_on(light.state, now, ctx);
-        (void) dev.sender.enqueue(packet::command::UP);
+        (void) enqueue_or_warn_(dev, packet::command::UP,
+                                packet::button::PACKETS,
+                                packet::msg_type::BUTTON,
+                                "set_light_brightness(on)");
     } else {
         light.state = light_sm::on_set_brightness(light.state, brightness, now, ctx);
         if (std::holds_alternative<light_sm::DimmingUp>(light.state)) {
-            (void) dev.sender.enqueue(packet::command::UP);
+            (void) enqueue_or_warn_(dev, packet::command::UP,
+                                    packet::button::PACKETS,
+                                    packet::msg_type::BUTTON,
+                                    "set_light_brightness(dim_up)");
         } else if (std::holds_alternative<light_sm::DimmingDown>(light.state)) {
-            (void) dev.sender.enqueue(packet::command::DOWN);
+            (void) enqueue_or_warn_(dev, packet::command::DOWN,
+                                    packet::button::PACKETS,
+                                    packet::msg_type::BUTTON,
+                                    "set_light_brightness(dim_down)");
         } else if (light_sm::is_on(light.state)) {
-            (void) dev.sender.enqueue(packet::command::UP);
+            (void) enqueue_or_warn_(dev, packet::command::UP,
+                                    packet::button::PACKETS,
+                                    packet::msg_type::BUTTON,
+                                    "set_light_brightness(on_state)");
         }
     }
 
@@ -350,6 +404,12 @@ void DeviceRegistry::command_group(Device *const *devices, size_t count, uint8_t
     // Set multi-dest fields so build_tx_packet_ dispatches to build_group_button_packet.
     Device &lead = *devices[0];
     auto &cmd = lead.sender.command();
+    uint8_t prev_num_dests = cmd.num_dests;
+    uint8_t prev_dest_channels[packet::GROUP_MAX_DESTS]{};
+    for (size_t i = 0; i < packet::GROUP_MAX_DESTS; ++i) {
+        prev_dest_channels[i] = cmd.dest_channels[i];
+    }
+
     cmd.num_dests = static_cast<uint8_t>(count);
     for (size_t i = 0; i < count; ++i) {
         cmd.dest_channels[i] = devices[i]->config.channel;
@@ -358,12 +418,17 @@ void DeviceRegistry::command_group(Device *const *devices, size_t count, uint8_t
     // Enqueue the command (3x press) via the lead device's sender.
     // No RELEASE needed for covers — blinds execute on press. For lights/dimming,
     // RELEASE is handled by loop_light_() after dim duration expires.
-    (void) lead.sender.enqueue(cmd_byte, packet::button::PACKETS, packet::msg_type::BUTTON);
+    if (!enqueue_or_warn_(lead, cmd_byte, packet::button::PACKETS,
+                          packet::msg_type::BUTTON, "command_group(lead)")) {
+        cmd.num_dests = prev_num_dests;
+        for (size_t i = 0; i < packet::GROUP_MAX_DESTS; ++i) {
+            cmd.dest_channels[i] = prev_dest_channels[i];
+        }
+        return;
+    }
     // Follow up with CHECK on each individual device so they report back status
     for (size_t i = 0; i < count; ++i) {
-        (void) devices[i]->sender.enqueue(packet::command::CHECK,
-                                           packet::limits::CHECK_PACKETS,
-                                           packet::msg_type::COMMAND);
+        (void) enqueue_check_(*devices[i], "command_group(check)");
     }
 
     // Update FSMs and notify for all devices
@@ -405,8 +470,8 @@ void DeviceRegistry::command_group(Device *const *devices, size_t count, uint8_t
 
 void DeviceRegistry::request_check(Device &dev) {
     if (!dev.active) return;
-    (void) dev.sender.enqueue(packet::command::CHECK, packet::limits::CHECK_PACKETS, packet::msg_type::COMMAND);
-    if (dev.is_cover()) {
+    bool queued = enqueue_check_(dev, "request_check");
+    if (queued && dev.is_cover()) {
         auto &cover = std::get<CoverDevice>(dev.logic);
         cover.poll.on_poll_sent(millis());
     }
@@ -552,15 +617,17 @@ void DeviceRegistry::loop_cover_(Device &dev, CoverDevice &cover, uint32_t now) 
     //    listening). If missed, retry via normal poll interval.
     bool moving = cover_sm::is_moving(cover.state);
     if (cover.poll.should_poll(now, moving)) {
-        (void) dev.sender.enqueue(packet::command::CHECK, packet::limits::CHECK_PACKETS, packet::msg_type::COMMAND);
-        cover.poll.on_poll_sent(now);
+        if (enqueue_check_(dev, "loop_cover(poll)")) {
+            cover.poll.on_poll_sent(now);
+        }
     }
 
     // 3. Post-stop verification — after Stopping cooldown expires, verify the
     //    blind's actual resting position (frozen estimate may drift).
     if (state_type_changed && was_stopping && std::holds_alternative<cover_sm::Idle>(cover.state)) {
-        (void) dev.sender.enqueue(packet::command::CHECK, packet::limits::CHECK_PACKETS, packet::msg_type::COMMAND);
-        cover.poll.on_poll_sent(now);
+        if (enqueue_check_(dev, "loop_cover(post_stop_check)")) {
+            cover.poll.on_poll_sent(now);
+        }
     }
 
     // 4. Intermediate position stop — if cover has position tracking and
@@ -576,8 +643,11 @@ void DeviceRegistry::loop_cover_(Device &dev, CoverDevice &cover, uint32_t now) 
         // Don't send stop for fully open/closed — the blind handles those endpoints
         if (at_target && cover.target_position > cover_sm::POSITION_CLOSED && cover.target_position < cover_sm::POSITION_OPEN) {
             dev.sender.clear_queue();
-            (void) dev.sender.enqueue(packet::command::STOP, packet::button::PACKETS, packet::msg_type::COMMAND);
-            (void) dev.sender.enqueue(packet::command::CHECK, packet::limits::CHECK_PACKETS, packet::msg_type::COMMAND);
+            (void) enqueue_or_warn_(dev, packet::command::STOP,
+                                    packet::button::PACKETS,
+                                    packet::msg_type::COMMAND,
+                                    "loop_cover(target_stop)");
+            (void) enqueue_check_(dev, "loop_cover(target_stop)");
             cover.state = cover_sm::on_command(cover.state, packet::command::STOP, now, ctx);
             state_type_changed = true;
             cover.target_position = cover_sm::NO_TARGET;  // Clear target
@@ -611,7 +681,10 @@ void DeviceRegistry::loop_light_(Device &dev, LightDevice &light, uint32_t now) 
     //    Button packets use RELEASE (0x00) instead of STOP (0x10).
     if (state_type_changed && !light_sm::is_dimming(light.state) &&
         light_sm::is_on(light.state)) {
-        (void) dev.sender.enqueue(packet::button::RELEASE, packet::button::PACKETS);
+        (void) enqueue_or_warn_(dev, packet::button::RELEASE,
+                                packet::button::PACKETS,
+                                packet::msg_type::BUTTON,
+                                "loop_light(release)");
     }
 
     // 3. Process command queue

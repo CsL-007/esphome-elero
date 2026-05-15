@@ -201,9 +201,9 @@ void Elero::setup() {
 
 #ifdef USE_ESP32
   // ─── Create FreeRTOS queues and spawn RF task on Core 0 ────────────────────
-  this->rx_queue_handle_ = xQueueCreate(16, sizeof(RfPacketInfo));
+  this->rx_queue_handle_ = xQueueCreate(32, sizeof(RfPacketInfo));
   this->tx_queue_handle_ = xQueueCreate(8, sizeof(RfTaskRequest));
-  this->tx_done_queue_handle_ = xQueueCreate(4, sizeof(TxResult));
+  this->tx_done_queue_handle_ = xQueueCreate(8, sizeof(TxResult));
 
   if (this->rx_queue_handle_ == nullptr ||
       this->tx_queue_handle_ == nullptr ||
@@ -255,7 +255,7 @@ void Elero::rf_task_func_(void *arg) {
 
     auto post_tx_done = [&](const TxResult &r) {
       if (xQueueSend(self->tx_done_queue_handle_, &r, 0) != pdPASS) {
-        ESP_LOGW(TAG, "tx_done_queue full, dropping TX completion");
+        ESP_LOGE(TAG, "tx_done_queue full, dropping TX completion");
       }
     };
 

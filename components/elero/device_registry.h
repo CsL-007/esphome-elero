@@ -215,6 +215,11 @@ class DeviceRegistry {
     void notify_config_changed_(const Device &dev);
     void notify_rf_packet_(const RfPacketInfo &pkt);
 
+    [[nodiscard]] bool enqueue_or_warn_(Device &dev, uint8_t cmd_byte,
+                                        uint8_t packets, uint8_t type,
+                                        const char *context);
+    [[nodiscard]] bool enqueue_check_(Device &dev, const char *context);
+
     /// Process cover device loop (polling, timeouts, position, command queue).
     void loop_cover_(Device &dev, CoverDevice &cover, uint32_t now);
 

@@ -869,6 +869,31 @@ TEST_F(DeviceRegistryTest, CommandGroup_SetsGroupFieldsOnLeadSender) {
     EXPECT_EQ(cmd.dest_channels[1], 3);
 }
 
+TEST_F(DeviceRegistryTest, CommandGroup_EnqueueFailureRestoresTemplate) {
+    auto *dev1 = registry_.upsert(make_cover_config_ch(0xA00001, 1));
+    auto *dev2 = registry_.upsert(make_cover_config_ch(0xA00002, 3));
+    ASSERT_NE(dev1, nullptr);
+    ASSERT_NE(dev2, nullptr);
+
+    auto &cmd = dev1->sender.command();
+    cmd.num_dests = 7;
+    cmd.dest_channels[0] = 9;
+    cmd.dest_channels[1] = 11;
+
+    for (int i = 0; i < pkt::limits::MAX_COMMAND_QUEUE; ++i) {
+        uint8_t queued = (i % 2 == 0) ? pkt::command::UP : pkt::command::DOWN;
+        ASSERT_TRUE(dev1->sender.enqueue(queued));
+    }
+
+    Device *devs[] = {dev1, dev2};
+    registry_.command_group(devs, 2, pkt::command::STOP);
+
+    EXPECT_EQ(cmd.num_dests, 7);
+    EXPECT_EQ(cmd.dest_channels[0], 9);
+    EXPECT_EQ(cmd.dest_channels[1], 11);
+    EXPECT_EQ(dev2->sender.queue_size(), 0u);
+}
+
 TEST_F(DeviceRegistryTest, CommandGroup_NumDestsAutoCleared) {
     // Test the mechanism directly: CommandSender::advance_queue_() clears num_dests.
     // We use a deferred-completion mock because process_queue sets TX_PENDING
