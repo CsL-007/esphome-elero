@@ -12,6 +12,8 @@ namespace elero {
 
 static const char *const TAG = "elero.cc1101";
 
+CC1101Driver::CC1101Driver() : tx_fsm_(*this) {}
+
 // ─── SpiTransaction RAII Implementation ───────────────────────────────────
 SpiTransaction::SpiTransaction(CC1101Driver *driver) : driver_(driver) {
   driver_->enable();
@@ -62,41 +64,55 @@ void CC1101Driver::reset() {
 }
 
 bool CC1101Driver::load_and_transmit(const uint8_t *pkt_buf, size_t len) {
-  if (this->tx_ctx_.state != TxState::IDLE) {
-    return false;  // Already transmitting
+  if (!this->tx_fsm_.is_idle()) {
+    ESP_LOGW(TAG, "TX start rejected: FSM busy");
+    return false;
   }
 
-  // Copy packet to internal buffer
-  size_t copy_len = (len <= CC1101_FIFO_LENGTH) ? len : CC1101_FIFO_LENGTH;
-  memcpy(this->tx_buf_, pkt_buf, copy_len);
-  this->tx_len_ = copy_len;
+  if (pkt_buf == nullptr || len == 0 || len > CC1101_FIFO_LENGTH) {
+    ESP_LOGW(TAG, "TX start rejected: invalid buffer ptr=%p len=%u", pkt_buf,
+             static_cast<unsigned>(len));
+    return false;
+  }
+
+  memcpy(this->tx_buf_, pkt_buf, len);
+  this->tx_len_ = len;
 
   ESP_LOGVV(TAG, "load_and_transmit: %d data bytes", this->tx_buf_[0]);
+  uint32_t now = millis();
+  if (!this->tx_fsm_.Start(now)) {
+    ESP_LOGW(TAG, "TX start rejected: FSM refused start");
+    return false;
+  }
 
-  // Transition to PREPARE — synchronous pre-TX sequence
-  this->tx_ctx_.state = TxState::PREPARE;
-  this->tx_ctx_.state_enter_time = millis();
-  this->tx_pending_success_ = false;
-  this->RadioDriver::mode_.store(RadioMode::TX, std::memory_order_release);
+  // Preserve the RadioDriver contract: load_and_transmit() performs the
+  // synchronous prepare phase and returns false on immediate hardware failure.
+  this->tx_fsm_.Poll(now);
+  if (this->tx_fsm_.is_idle()) {
+    return this->tx_terminal_result_ == Cc1101TxTerminalResult::Success;
+  }
 
   return true;
 }
 
 TxPollResult CC1101Driver::poll_tx() {
-  if (this->tx_ctx_.state == TxState::IDLE) {
-    return this->tx_pending_success_ ? TxPollResult::SUCCESS : TxPollResult::FAILED;
+  if (this->tx_fsm_.is_idle()) {
+    return this->tx_terminal_result_ == Cc1101TxTerminalResult::Success
+               ? TxPollResult::SUCCESS
+               : TxPollResult::FAILED;
   }
 
-  this->handle_tx_state_(millis());
-
-  if (this->tx_ctx_.state == TxState::IDLE) {
-    return this->tx_pending_success_ ? TxPollResult::SUCCESS : TxPollResult::FAILED;
+  this->tx_fsm_.Poll(millis());
+  if (!this->tx_fsm_.is_idle()) {
+    return TxPollResult::PENDING;
   }
-  return TxPollResult::PENDING;
+  return this->tx_terminal_result_ == Cc1101TxTerminalResult::Success
+             ? TxPollResult::SUCCESS
+             : TxPollResult::FAILED;
 }
 
 void CC1101Driver::abort_tx() {
-  this->recover_radio_();
+  this->tx_fsm_.Abort(millis());
 }
 
 bool CC1101Driver::has_data() {
@@ -290,153 +306,180 @@ void CC1101Driver::init_registers() {
 
 // ─── TX State Machine ─────────────────────────────────────────────────────
 
-void CC1101Driver::handle_tx_state_(uint32_t now) {
-  if (this->tx_ctx_.state == TxState::IDLE) {
-    return;
-  }
+bool CC1101Driver::tx_prepare_for_fsm() {
+  (void) this->write_cmd(CC1101_SIDLE);
 
-  uint32_t elapsed = now - this->tx_ctx_.state_enter_time;
-  uint8_t marcstate;
-
-  switch (this->tx_ctx_.state) {
-    case TxState::PREPARE: {
-      // Synchronous pre-TX sequence (~1ms total)
-
-      // 1. SIDLE
-      (void) this->write_cmd(CC1101_SIDLE);
-
-      // 2. Poll MARCSTATE == IDLE, max ~1ms
-      bool reached_idle = false;
-      for (int i = 0; i < 20; ++i) {
-        esp_rom_delay_us(50);
-        marcstate = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
-        if (marcstate == CC1101_MARCSTATE_IDLE) {
-          reached_idle = true;
-          break;
-        }
-      }
-      if (!reached_idle) {
-        marcstate = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
-        ESP_LOGW(TAG, "PREPARE: SIDLE failed, MARCSTATE=0x%02x", marcstate);
-        this->tx_ctx_.state = TxState::RECOVER;
-        this->tx_ctx_.state_enter_time = now;
-        return;
-      }
-
-      // 3. Flush TX FIFO
-      (void) this->write_cmd(CC1101_SFTX);
-      esp_rom_delay_us(100);
-
-      // 4. Load TX FIFO
-      if (!this->write_burst(CC1101_TXFIFO, this->tx_buf_, static_cast<uint8_t>(this->tx_len_))) {
-        ESP_LOGW(TAG, "PREPARE: FIFO write failed");
-        this->tx_ctx_.state = TxState::RECOVER;
-        this->tx_ctx_.state_enter_time = now;
-        return;
-      }
-
-      // 5. Clear TX-done flag so we can detect TX-end interrupt
-      if (this->tx_done_) {
-        this->tx_done_->store(false, std::memory_order_release);
-      }
-
-      // 6. Trigger TX
-      (void) this->write_cmd(CC1101_STX);
-
-      // 7. Poll MARCSTATE == TX, max ~1ms (covers ~700us calibration)
-      for (int i = 0; i < 20; ++i) {
-        esp_rom_delay_us(50);
-        marcstate = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
-        if (marcstate == CC1101_MARCSTATE_TX) {
-          this->tx_ctx_.state = TxState::WAIT_TX;
-          this->tx_ctx_.state_enter_time = now;
-          return;
-        }
-      }
-
-      // STX didn't reach TX state
-      marcstate = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
-      ESP_LOGW(TAG, "PREPARE: STX failed, MARCSTATE=0x%02x", marcstate);
-      this->tx_ctx_.state = TxState::RECOVER;
-      this->tx_ctx_.state_enter_time = now;
+  bool reached_idle = false;
+  for (uint8_t i = 0; i < TX_START_PROOF_POLLS; ++i) {
+    esp_rom_delay_us(50);
+    uint8_t marcstate =
+        this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
+    if (marcstate == CC1101_MARCSTATE_IDLE) {
+      reached_idle = true;
       break;
     }
-
-    case TxState::WAIT_TX: {
-      // Interrupt-driven with MARCSTATE polling fallback
-      bool irq_fired = this->tx_done_ && this->tx_done_->load(std::memory_order_acquire);
-      if (irq_fired) {
-        // GDO0 interrupt fired — TX likely complete, verify FIFO empty
-        esp_rom_delay_us(50);
-        uint8_t txbytes = this->read_status_reliable_(CC1101_TXBYTES) & packet::cc1101_status::BYTE_COUNT_MASK;
-        if (txbytes == 0) {
-          ESP_LOGV(TAG, "TX successful");
-          this->finalize_tx_success_();
-          return;
-        }
-        // Grace window — GDO0 may fire slightly before FIFO fully drains
-        esp_rom_delay_us(100);
-        txbytes = this->read_status_reliable_(CC1101_TXBYTES) & packet::cc1101_status::BYTE_COUNT_MASK;
-        if (txbytes == 0) {
-          ESP_LOGV(TAG, "TX successful (after grace)");
-          this->finalize_tx_success_();
-          return;
-        }
-        ESP_LOGE(TAG, "FIFO not empty after TX interrupt, txbytes=%u", txbytes);
-        this->tx_ctx_.state = TxState::RECOVER;
-        this->tx_ctx_.state_enter_time = now;
-        return;
-      }
-
-      // MARCSTATE polling fallback — detect TX completion if GDO0 was missed
-      marcstate = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
-      if (marcstate == CC1101_MARCSTATE_IDLE || marcstate == CC1101_MARCSTATE_RX) {
-        uint8_t txbytes = this->read_status_reliable_(CC1101_TXBYTES) & packet::cc1101_status::BYTE_COUNT_MASK;
-        if (txbytes == 0) {
-          ESP_LOGV(TAG, "TX successful (MARCSTATE fallback)");
-          this->finalize_tx_success_();
-          return;
-        }
-      }
-
-      // Timeout
-      if (elapsed > TxContext::STATE_TIMEOUT_MS) {
-        ESP_LOGE(TAG, "TX timeout in WAIT_TX after %ums", elapsed);
-        this->tx_ctx_.state = TxState::RECOVER;
-        this->tx_ctx_.state_enter_time = now;
-      }
-      break;
-    }
-
-    case TxState::RECOVER:
-      this->recover_radio_();
-      break;
-
-    case TxState::IDLE:
-      break;
   }
+  if (!reached_idle) {
+    uint8_t marcstate =
+        this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
+    ESP_LOGW(TAG, "Prepare: SIDLE failed, MARCSTATE=0x%02x", marcstate);
+    return false;
+  }
+
+  (void) this->write_cmd(CC1101_SFTX);
+  esp_rom_delay_us(100);
+
+  if (!this->write_burst(CC1101_TXFIFO, this->tx_buf_, static_cast<uint8_t>(this->tx_len_))) {
+    ESP_LOGW(TAG, "Prepare: FIFO write failed");
+    return false;
+  }
+
+  if (this->tx_done_ != nullptr) {
+    this->tx_done_->store(false, std::memory_order_release);
+  }
+
+  (void) this->write_cmd(CC1101_STX);
+  return true;
 }
 
-void CC1101Driver::finalize_tx_success_() {
-  // MCSM1=0x3F auto-returns to RX after TX. Trust the hardware for the
-  // state transition, but verify RXBYTES is clean — a stale FIFO would
-  // mean the first RX read returns garbage. If RXBYTES != 0, flush.
+Cc1101TxPhaseResult CC1101Driver::tx_wait_started_for_fsm() {
+  for (uint8_t i = 0; i < TX_START_PROOF_POLLS; ++i) {
+    esp_rom_delay_us(50);
+    uint8_t marcstate =
+        this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
+    if (marcstate == CC1101_MARCSTATE_TX) {
+      return Cc1101TxPhaseResult::Succeeded;
+    }
+  }
+
+  uint8_t marcstate =
+      this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
+  ESP_LOGW(TAG, "WaitTxStarted: STX failed, MARCSTATE=0x%02x", marcstate);
+  return Cc1101TxPhaseResult::Failed;
+}
+
+Cc1101TxPhaseResult CC1101Driver::tx_wait_done_for_fsm() {
+  switch (this->tx_check_done_result_()) {
+    case TxDoneCheckResult::Pending:
+      return Cc1101TxPhaseResult::Pending;
+    case TxDoneCheckResult::Succeeded:
+      return Cc1101TxPhaseResult::Succeeded;
+    case TxDoneCheckResult::FailedTxBytesNotEmpty:
+    case TxDoneCheckResult::FailedTimeout:
+      return Cc1101TxPhaseResult::Failed;
+  }
+  return Cc1101TxPhaseResult::Failed;
+}
+
+CC1101Driver::TxDoneCheckResult CC1101Driver::tx_check_done_result_() {
+  bool irq_fired = this->tx_done_ != nullptr && this->tx_done_->load(std::memory_order_acquire);
+  if (irq_fired) {
+    esp_rom_delay_us(50);
+    uint8_t txbytes =
+        this->read_status_reliable_(CC1101_TXBYTES) & packet::cc1101_status::BYTE_COUNT_MASK;
+    if (txbytes == 0) {
+      ESP_LOGV(TAG, "TX successful");
+      return TxDoneCheckResult::Succeeded;
+    }
+
+    if (this->tx_verify_retry_count_ == 0) {
+      ++this->tx_verify_retry_count_;
+      esp_rom_delay_us(100);
+      txbytes = this->read_status_reliable_(CC1101_TXBYTES) &
+                packet::cc1101_status::BYTE_COUNT_MASK;
+      if (txbytes == 0) {
+        ESP_LOGV(TAG, "TX successful (after grace)");
+        return TxDoneCheckResult::Succeeded;
+      }
+    }
+
+    ESP_LOGE(TAG, "FIFO not empty after TX interrupt, txbytes=%u", txbytes);
+    return TxDoneCheckResult::FailedTxBytesNotEmpty;
+  }
+
+  uint8_t marcstate = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
+  if (marcstate == CC1101_MARCSTATE_IDLE || marcstate == CC1101_MARCSTATE_RX) {
+    uint8_t txbytes =
+        this->read_status_reliable_(CC1101_TXBYTES) & packet::cc1101_status::BYTE_COUNT_MASK;
+    if (txbytes == 0) {
+      ESP_LOGV(TAG, "TX successful (MARCSTATE fallback)");
+      return TxDoneCheckResult::Succeeded;
+    }
+  }
+
+  uint32_t elapsed = millis() - this->tx_state_enter_time_;
+  if (elapsed > TX_DONE_TIMEOUT_MS) {
+    ESP_LOGE(TAG, "TX timeout in WaitTxDone after %ums", elapsed);
+    return TxDoneCheckResult::FailedTimeout;
+  }
+  return TxDoneCheckResult::Pending;
+}
+
+Cc1101TxPhaseResult CC1101Driver::tx_return_to_rx_for_fsm() {
+  uint32_t elapsed = millis() - this->tx_state_enter_time_;
+  uint8_t marcstate =
+      this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
+  if (marcstate == CC1101_MARCSTATE_IDLE) {
+    (void) this->write_cmd(CC1101_SRX);
+    esp_rom_delay_us(100);
+    marcstate = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
+  }
+
+  if (marcstate != CC1101_MARCSTATE_RX) {
+    if (marcstate_is_transient(marcstate) && elapsed <= RX_READY_TIMEOUT_MS) {
+      ESP_LOGD(TAG, "ReturnToRx: waiting for RX MARCSTATE=0x%02x after %ums", marcstate,
+               elapsed);
+      return Cc1101TxPhaseResult::Pending;
+    }
+    ESP_LOGW(TAG, "ReturnToRx: radio not RX-ready, MARCSTATE=0x%02x after %ums", marcstate,
+             elapsed);
+    return Cc1101TxPhaseResult::Failed;
+  }
+
   uint8_t rxbytes = this->read_status_reliable_(CC1101_RXBYTES);
   if (rxbytes & packet::cc1101_status::RXBYTES_OVERFLOW_BIT) {
-    ESP_LOGW(TAG, "RX FIFO overflow after TX, flushing");
+    ESP_LOGW(TAG, "ReturnToRx: RX FIFO overflow after TX, flushing");
     this->flush_and_rx();
   } else if ((rxbytes & packet::cc1101_status::BYTE_COUNT_MASK) > 0) {
-    ESP_LOGV(TAG, "RX FIFO has %d stale bytes after TX, flushing",
+    ESP_LOGV(TAG, "ReturnToRx: RX FIFO has %d byte(s) after TX, preserving for RX drain",
              rxbytes & packet::cc1101_status::BYTE_COUNT_MASK);
-    (void) this->write_cmd(CC1101_SFRX);
+    if (this->rx_ready_ != nullptr) {
+      this->rx_ready_->store(true, std::memory_order_release);
+    }
+  }
+
+  marcstate = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
+  if (marcstate != CC1101_MARCSTATE_RX) {
+    if (marcstate_is_transient(marcstate) && elapsed <= RX_READY_TIMEOUT_MS) {
+      ESP_LOGD(TAG, "ReturnToRx: waiting for RX restore MARCSTATE=0x%02x after %ums",
+               marcstate, elapsed);
+      return Cc1101TxPhaseResult::Pending;
+    }
+    ESP_LOGW(TAG, "ReturnToRx: RX restore failed, MARCSTATE=0x%02x after %ums", marcstate,
+             elapsed);
+    return Cc1101TxPhaseResult::Failed;
   }
 
   this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);
-  this->tx_pending_success_ = true;
-  this->tx_ctx_.state = TxState::IDLE;
+  return Cc1101TxPhaseResult::Succeeded;
 }
 
-void CC1101Driver::recover_radio_() {
+void CC1101Driver::tx_on_state_enter_for_fsm(Cc1101TxState state, uint32_t now) {
+  this->tx_state_enter_time_ = now;
+  if (state != Cc1101TxState::WaitTxDone) {
+    this->tx_verify_retry_count_ = 0;
+  }
+}
+
+void CC1101Driver::tx_set_terminal_result_for_fsm(Cc1101TxTerminalResult result) {
+  this->tx_terminal_result_ = result;
+}
+
+void CC1101Driver::tx_set_mode_for_fsm(RadioMode mode) {
+  this->RadioDriver::mode_.store(mode, std::memory_order_release);
+}
+
+void CC1101Driver::tx_recover_for_fsm() {
   this->stat_tx_recover_.fetch_add(1, std::memory_order_relaxed);
 
   // Track recovery frequency for escalation
@@ -455,9 +498,7 @@ void CC1101Driver::recover_radio_() {
 
   uint8_t marc = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
   if (marc == CC1101_MARCSTATE_RX || marcstate_is_transient(marc)) {
-    // Recovered — done
-    this->tx_ctx_.state = TxState::IDLE;
-    this->tx_pending_success_ = false;
+    this->tx_set_terminal_result_for_fsm(Cc1101TxTerminalResult::Failed);
     return;
   }
 
@@ -476,8 +517,7 @@ void CC1101Driver::recover_radio_() {
     }
   }
 
-  this->tx_ctx_.state = TxState::IDLE;
-  this->tx_pending_success_ = false;
+  this->tx_set_terminal_result_for_fsm(Cc1101TxTerminalResult::Failed);
 }
 
 // ─── Radio Control ────────────────────────────────────────────────────────
@@ -489,21 +529,24 @@ void CC1101Driver::flush_and_rx() {
   (void) this->write_cmd(CC1101_SIDLE);
   esp_rom_delay_us(100);
 
-  // 2. Clear RX flag (safe — radio is idle, no new interrupts)
+  // 2. Clear stale IRQ flags while the radio is definitely idle.
   if (this->rx_ready_) {
     this->rx_ready_->store(false, std::memory_order_release);
+  }
+  if (this->tx_done_) {
+    this->tx_done_->store(false, std::memory_order_release);
   }
 
   // 3. Flush both FIFOs
   (void) this->write_cmd(CC1101_SFRX);
   (void) this->write_cmd(CC1101_SFTX);
 
-  // 4. Re-enable RX
-  (void) this->write_cmd(CC1101_SRX);
+  // 4. Switch software routing back to RX before re-enabling hardware RX.
+  // This avoids misrouting a fast post-recovery packet to tx_done_.
   this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);
+  (void) this->write_cmd(CC1101_SRX);
 
-  // 5. Verify radio entered RX — caller (recover_radio_) handles escalation
-  //    Calibration states are transient (~700us) — only warn on truly stuck states.
+  // 5. Verify radio entered RX — caller handles escalation on bad states.
   uint8_t marc = this->read_status(CC1101_MARCSTATE) & packet::cc1101_status::MARCSTATE_MASK;
   if (marc != CC1101_MARCSTATE_RX && !marcstate_is_transient(marc)) {
     ESP_LOGW(TAG, "flush_and_rx: not in RX after SRX, MARCSTATE=0x%02x", marc);

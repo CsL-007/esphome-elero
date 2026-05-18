@@ -136,6 +136,20 @@ add_executable(test_cc1101_compat
 )
 target_link_libraries(test_cc1101_compat GTest::gtest_main)
 
+# CC1101 TX FSM orchestration (phase ownership, recovery, abort semantics)
+add_executable(test_cc1101_tx_fsm
+  test_cc1101_tx_fsm.cpp
+  ${COMPONENTS_DIR}/elero/cc1101_tx_fsm.cpp
+)
+target_link_libraries(test_cc1101_tx_fsm GTest::gtest_main)
+
+# CC1101 TX helper semantics (fallback success, strict TXBYTES, RX restore)
+add_executable(test_cc1101_driver_tx
+  test_cc1101_driver_tx.cpp
+)
+target_compile_definitions(test_cc1101_driver_tx PRIVATE UNIT_TEST)
+target_link_libraries(test_cc1101_driver_tx GTest::gtest_main)
+
 # Frequency register conversion: CC1101 → SX1262/SX1276 (pure math, no hardware deps)
 add_executable(test_freq_conversion
   test_freq_conversion.cpp
@@ -152,6 +166,8 @@ target_link_libraries(test_sx1262_tx_fsm GTest::gtest_main)
 # Discover all tests
 include(GoogleTest)
 gtest_discover_tests(test_cc1101_compat)
+gtest_discover_tests(test_cc1101_tx_fsm)
+gtest_discover_tests(test_cc1101_driver_tx)
 gtest_discover_tests(test_freq_conversion)
 gtest_discover_tests(test_sx1262_tx_fsm)
 gtest_discover_tests(test_packet_vectors)
@@ -169,7 +185,8 @@ gtest_discover_tests(test_device_registry)
 
 # All test targets
 set(ALL_TEST_TARGETS
-  test_cc1101_compat test_freq_conversion test_sx1262_tx_fsm
+  test_cc1101_compat test_cc1101_tx_fsm test_cc1101_driver_tx
+  test_freq_conversion test_sx1262_tx_fsm
   test_packet_vectors test_command_sender test_golden_vectors
   test_encryption_vectors test_parse_roundtrip test_string_functions
   test_cover_sm test_light_sm test_poll_timer
