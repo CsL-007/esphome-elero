@@ -389,192 +389,38 @@ void Sx1262Driver::reset() {
 // cc1101_crc16() and cc1101_pn9_whiten() are in cc1101_compat.h (inline, testable on host)
 
 bool Sx1262Driver::load_and_transmit(const uint8_t *pkt_buf, size_t len) {
-  if (this->tx_in_progress_) {
+  if (!this->tx_fsm_.is_idle()) {
     return false;
   }
 
-  if (!this->set_standby_(sx1262::STDBY_XOSC)) return false;
-
-  // Hub provides: [length_byte | data...] (unwhitened CC1101 format).
-  // CC1101 receivers expect: whitened(length + data + CRC16).
-  // 1. Copy raw packet
-  // 2. Compute CC1101 CRC-16 over the raw data (after length byte)
-  // 3. Append 2 CRC bytes
-  // 4. IBM PN9 whiten everything (length + data + CRC)
-  // 5. Transmit
-  uint8_t data_len = pkt_buf[0];
-  size_t raw_total = 1 + data_len;       // length byte + payload
-  size_t tx_total = raw_total + 2;       // + 2 CRC bytes
-
-  uint8_t tx_buf[sx1262::MAX_PACKET_SIZE];
-  if (tx_total > sizeof(tx_buf)) {
-    return false;
-  }
-  memcpy(tx_buf, pkt_buf, raw_total);
-
-  // CC1101 CRC-16 over length byte + data bytes (per CC1101 datasheet section 15.2.3)
-  uint16_t crc = cc1101_crc16(tx_buf, raw_total);
-  tx_buf[raw_total] = static_cast<uint8_t>(crc >> 8);      // CRC MSB first
-  tx_buf[raw_total + 1] = static_cast<uint8_t>(crc & 0xFF);
-
-  // Log raw TX bytes before whitening
-  ESP_LOGD(TAG, "TX raw [%d]: %s", static_cast<int>(tx_total),
-           format_hex_pretty(tx_buf, tx_total).c_str());
-
-  // IBM PN9 whiten everything (length + data + CRC)
-  this->apply_pn9_(tx_buf, tx_total);
-
-  // Re-apply PA config + errata fixes before TX (RadioLib does this on every TX)
-  this->set_pa_config_();
-  this->apply_errata_pa_clamping_();
-  uint8_t tx_params[2] = {static_cast<uint8_t>(this->pa_power_), sx1262::PA_RAMP_200US};
-  if (!this->write_opcode_(sx1262::SET_TX_PARAMS, tx_params, 2)) return false;
-  this->apply_errata_sensitivity_();
-
-  // Hardware sync word (16 bits from register 0x06C0 = D3 91).
-  // SX1262 generates: [preamble] [D3 91] [buffer data]
-  uint8_t pkt_params[9] = {
-      0x00, 0x60,  // Preamble: 96 bits (12 bytes, matches CC1101)
-      0x00,        // Preamble detector: OFF
-      0x20,        // Sync word: 32 bits (D3 91 D3 91 — CC1101 SYNC_MODE=011 doubles it)
-      0x00,        // No address filtering
-      0x00,        // Fixed length
-      static_cast<uint8_t>(tx_total),
-      0x01,        // CRC OFF (we compute CC1101 CRC in software)
-      0x00,        // Whitening OFF (IBM PN9 applied in software)
-  };
-  if (!this->write_opcode_(sx1262::SET_PACKET_PARAMS, pkt_params, 9)) return false;
-
-  // Reset buffer base address (safety — RadioLib does this before every TX)
-  uint8_t buf_addr[2] = {0x00, 0x00};
-  if (!this->write_opcode_(sx1262::SET_BUFFER_BASE_ADDRESS, buf_addr, 2)) return false;
-
-  if (!this->write_fifo_(0x00, tx_buf, tx_total)) return false;
-
-  // Clear ALL IRQ flags in the SX1262 register AND the atomic flag.
-  // Without this, stale IRQ bits (e.g., RX_DONE) can keep DIO1 high,
-  // preventing the rising edge that signals TX_DONE. (RadioLib does this.)
-  this->clear_irq_status_();
-  if (this->tx_done_) {
-    this->tx_done_->store(false, std::memory_order_release);
-  }
-
-  this->set_dio_irq_for_tx_();
-
-  // Enable external FEM PA before TX
-  if (this->fem_pa_pin_) {
-    this->fem_pa_pin_->digital_write(true);
-  }
-
-  uint8_t timeout[3] = {0x00, 0x00, 0x00};
-  if (!this->write_opcode_(sx1262::SET_TX, timeout, 3)) {
-    if (this->fem_pa_pin_) this->fem_pa_pin_->digital_write(false);
+  if (len == 0 || len > sizeof(this->tx_buf_)) {
     return false;
   }
 
-  // Verify chip entered TX mode
-  uint8_t tx_chip_mode = this->read_chip_mode_();
-  if (tx_chip_mode == 0xFF) {
-    if (this->fem_pa_pin_) this->fem_pa_pin_->digital_write(false);
-    return false;
-  }
-  ESP_LOGD(TAG, "TX start: mode=0x%x fem=%d", tx_chip_mode, this->fem_pa_pin_ ? 1 : 0);
-
-  this->tx_in_progress_ = true;
-  this->tx_start_ms_ = millis();
-  this->tx_pending_success_ = false;
-  this->RadioDriver::mode_.store(RadioMode::TX, std::memory_order_release);
-
-  return true;
+  memcpy(this->tx_buf_, pkt_buf, len);
+  this->tx_len_ = len;
+  return this->tx_fsm_.Start(millis());
 }
 
 TxPollResult Sx1262Driver::poll_tx() {
-  if (!this->tx_in_progress_) {
-    return this->tx_pending_success_ ? TxPollResult::SUCCESS : TxPollResult::FAILED;
+  if (this->tx_fsm_.is_idle()) {
+    return this->tx_terminal_result_ == Sx1262TxTerminalResult::Success
+               ? TxPollResult::SUCCESS
+               : TxPollResult::FAILED;
   }
 
-  // ── Primary: read the hardware IRQ register (authoritative) ───────────────
-  // The ISR flag is a fast wake signal, but GetIrqStatus() is the source of truth.
-  // This leverages the SX1262's distinct TX_DONE/RX_DONE bits — no mode-based
-  // routing ambiguity like CC1101's shared GDO0 pin.
-  uint8_t irq_buf[2] = {};
-  if (!this->read_opcode_(sx1262::GET_IRQ_STATUS, irq_buf, 2)) {
-    // SPI failure during TX — abort
-    ESP_LOGE(TAG, "TX poll: SPI failure reading IRQ status");
-    this->tx_in_progress_ = false;
-    this->tx_pending_success_ = false;
-    this->stat_tx_recover_.fetch_add(1, std::memory_order_relaxed);
-    if (this->fem_pa_pin_) this->fem_pa_pin_->digital_write(false);
-    return TxPollResult::FAILED;
-  }
-  uint16_t irq_status = (static_cast<uint16_t>(irq_buf[0]) << 8) | irq_buf[1];
-
-  if (irq_status & sx1262::IRQ_TX_DONE) {
-    // Clear all hardware IRQ flags + atomic flag
-    (void) this->write_opcode_(sx1262::CLR_IRQ_STATUS, irq_buf, 2);
-    if (this->tx_done_) this->tx_done_->store(false, std::memory_order_release);
-
-    uint32_t elapsed = millis() - this->tx_start_ms_;
-    ESP_LOGD(TAG, "TX done irq=0x%04x %ums", irq_status, elapsed);
-    this->tx_in_progress_ = false;
-    this->tx_pending_success_ = true;
-
-    // Disable external FEM PA after TX
-    if (this->fem_pa_pin_) {
-      this->fem_pa_pin_->digital_write(false);
-    }
-
-    // Restore RX packet params (TX changed payload length) and re-enter RX
-    this->restore_rx_packet_params_();
-    this->set_dio_irq_for_rx_();
-    this->set_rx_();
-
-    // ── Post-TX RX verification (SX1262-specific) ────────────────────────
-    // Unlike CC1101's MCSM1 auto-return-to-RX, the SX1262 falls back to
-    // STDBY_RC after TX (SET_RX_TX_FALLBACK_MODE=0x20). We explicitly call
-    // set_rx_() above, but verify it actually worked — if the chip is stuck
-    // in STDBY, we'd be deaf until the 5s watchdog fires.
-    uint8_t chip_mode = this->read_chip_mode_();
-    if (chip_mode != 0x05 && chip_mode != 0xFF) {
-      ESP_LOGW(TAG, "TX done but chip not in RX (mode=0x%x), recovering", chip_mode);
-      this->recover();
-    }
-
-    return TxPollResult::SUCCESS;
+  this->tx_fsm_.Poll(millis());
+  if (!this->tx_fsm_.is_idle()) {
+    return TxPollResult::PENDING;
   }
 
-  // Timeout check
-  if (millis() - this->tx_start_ms_ > TX_TIMEOUT_MS) {
-    ESP_LOGE(TAG, "TX timeout after %ums (irq=0x%04x)", TX_TIMEOUT_MS, irq_status);
-    this->tx_in_progress_ = false;
-    this->tx_pending_success_ = false;
-    this->stat_tx_recover_.fetch_add(1, std::memory_order_relaxed);
-
-    // Disable external FEM PA on TX failure
-    if (this->fem_pa_pin_) {
-      this->fem_pa_pin_->digital_write(false);
-    }
-
-    // Recover via the escalating path (not just a simple standby→RX)
-    this->recover();
-    return TxPollResult::FAILED;
-  }
-
-  return TxPollResult::PENDING;
+  return this->tx_terminal_result_ == Sx1262TxTerminalResult::Success
+             ? TxPollResult::SUCCESS
+             : TxPollResult::FAILED;
 }
 
 void Sx1262Driver::abort_tx() {
-  if (this->fem_pa_pin_) {
-    this->fem_pa_pin_->digital_write(false);
-  }
-  if (this->tx_in_progress_) {
-    this->tx_in_progress_ = false;
-    this->tx_pending_success_ = false;
-    this->stat_tx_recover_.fetch_add(1, std::memory_order_relaxed);
-  }
-  (void) this->set_standby_();
-  this->set_dio_irq_for_rx_();
-  this->set_rx_();
+  this->tx_fsm_.Abort(millis());
 }
 
 bool Sx1262Driver::has_data() {
@@ -724,7 +570,7 @@ void Sx1262Driver::recover() {
   ++this->recoveries_in_window_;
 
   // ── Level 1: Soft recovery (standby → clear → RX) ────────────────────────
-  ESP_LOGW(TAG, "recover: soft (%d/%d in window)", this->recoveries_in_window_, RECOVERIES_BEFORE_RESET);
+  ESP_LOGW(TAG, "recover: soft attempt %d in current window", this->recoveries_in_window_);
   (void) this->set_standby_();
 
   this->clear_irq_status_();
@@ -745,21 +591,29 @@ void Sx1262Driver::recover() {
     return;  // In RX — soft recovery succeeded
   }
 
-  // ── Level 2: Hardware RST pin reset + full re-init ────────────────────────
-  if (this->recoveries_in_window_ >= RECOVERIES_BEFORE_RESET) {
-    ++this->resets_in_window_;
-    ESP_LOGE(TAG, "recover: RST reset (%d/%d in window, mode=0x%x)",
-             this->resets_in_window_, RESETS_BEFORE_FAILED, chip_mode);
-    this->reset();
-    this->init();  // init() ends in set_rx_() which sets mode_ = RX
-    this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);  // explicit — don't depend on init() internals
-
-    // ── Level 3: Mark failed — radio is unrecoverable ─────────────────────
-    if (this->resets_in_window_ >= RESETS_BEFORE_FAILED) {
-      ESP_LOGE(TAG, "recover: unrecoverable after %d resets, marking failed", this->resets_in_window_);
-      this->failed_ = true;
-    }
+  // Soft recovery already failed: reset immediately instead of waiting for more
+  // watchdog periods while the radio stays deaf.
+  ++this->resets_in_window_;
+  ESP_LOGE(TAG, "recover: soft recovery failed, RST reset (%d/%d in window, mode=0x%x)",
+           this->resets_in_window_, RESETS_BEFORE_FAILED, chip_mode);
+  this->reset();
+  if (!this->init()) {
+    ESP_LOGE(TAG, "recover: init failed after RST reset");
   }
+  this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);
+
+  uint8_t reset_chip_mode = this->read_chip_mode_();
+  if (reset_chip_mode == 0x05) {
+    return;
+  }
+
+  if (this->resets_in_window_ >= RESETS_BEFORE_FAILED) {
+    ESP_LOGE(TAG, "recover: unrecoverable after %d resets, marking failed", this->resets_in_window_);
+    this->failed_ = true;
+    return;
+  }
+
+  ESP_LOGW(TAG, "recover: reset completed but radio still not in RX (mode=0x%x)", reset_chip_mode);
 }
 
 void Sx1262Driver::set_frequency_regs(uint8_t f2, uint8_t f1, uint8_t f0) {
@@ -777,6 +631,218 @@ void Sx1262Driver::set_frequency_regs(uint8_t f2, uint8_t f1, uint8_t f0) {
   this->set_dio_irq_for_rx_();
   this->set_rx_();
   ESP_LOGI(TAG, "SX1262 re-initialised: freq2=0x%02x freq1=0x%02x freq0=0x%02x", f2, f1, f0);
+}
+
+bool Sx1262Driver::tx_prepare_for_fsm() {
+  if (this->tx_len_ == 0) {
+    ESP_LOGW(TAG, "Prepare: no buffered packet");
+    return false;
+  }
+
+  uint8_t data_len = this->tx_buf_[0];
+  size_t raw_total = static_cast<size_t>(data_len) + 1;
+  if (raw_total != this->tx_len_) {
+    ESP_LOGW(TAG, "Prepare: buffered len mismatch pkt=%u buf=%u", data_len,
+             static_cast<unsigned>(this->tx_len_));
+    return false;
+  }
+
+  size_t tx_total = raw_total + 2;
+  if (tx_total > sizeof(this->tx_buf_)) {
+    ESP_LOGW(TAG, "Prepare: tx_total=%u exceeds buffer", static_cast<unsigned>(tx_total));
+    return false;
+  }
+
+  if (!this->set_standby_(sx1262::STDBY_XOSC)) {
+    ESP_LOGW(TAG, "Prepare: failed to enter STDBY_XOSC");
+    return false;
+  }
+
+  uint16_t crc = cc1101_crc16(this->tx_buf_, raw_total);
+  this->tx_buf_[raw_total] = static_cast<uint8_t>(crc >> 8);
+  this->tx_buf_[raw_total + 1] = static_cast<uint8_t>(crc & 0xFF);
+
+  ESP_LOGD(TAG, "TX raw [%d]: %s", static_cast<int>(tx_total),
+           format_hex_pretty(this->tx_buf_, tx_total).c_str());
+
+  this->apply_pn9_(this->tx_buf_, tx_total);
+
+  this->set_pa_config_();
+  this->apply_errata_pa_clamping_();
+  uint8_t tx_params[2] = {static_cast<uint8_t>(this->pa_power_), sx1262::PA_RAMP_200US};
+  if (!this->write_opcode_(sx1262::SET_TX_PARAMS, tx_params, 2)) {
+    ESP_LOGW(TAG, "Prepare: SET_TX_PARAMS failed");
+    return false;
+  }
+  this->apply_errata_sensitivity_();
+
+  uint8_t pkt_params[9] = {
+      0x00, 0x60,
+      0x00,
+      0x20,
+      0x00,
+      0x00,
+      static_cast<uint8_t>(tx_total),
+      0x01,
+      0x00,
+  };
+  if (!this->write_opcode_(sx1262::SET_PACKET_PARAMS, pkt_params, 9)) {
+    ESP_LOGW(TAG, "Prepare: SET_PACKET_PARAMS failed");
+    return false;
+  }
+
+  uint8_t buf_addr[2] = {0x00, 0x00};
+  if (!this->write_opcode_(sx1262::SET_BUFFER_BASE_ADDRESS, buf_addr, 2)) {
+    ESP_LOGW(TAG, "Prepare: SET_BUFFER_BASE_ADDRESS failed");
+    return false;
+  }
+
+  if (!this->write_fifo_(0x00, this->tx_buf_, tx_total)) {
+    ESP_LOGW(TAG, "Prepare: WRITE_BUFFER failed");
+    return false;
+  }
+
+  this->clear_irq_status_();
+  if (this->tx_done_) {
+    this->tx_done_->store(false, std::memory_order_release);
+  }
+  this->set_dio_irq_for_tx_();
+
+  if (this->fem_pa_pin_) {
+    this->fem_pa_pin_->digital_write(true);
+  }
+
+  this->set_tx_();
+  uint8_t tx_chip_mode = this->read_chip_mode_();
+  if (tx_chip_mode != 0xFF && tx_chip_mode != 0x06) {
+    ESP_LOGD(TAG, "Prepare: transient post-SET_TX mode=0x%02x", tx_chip_mode);
+  }
+
+  ESP_LOGD(TAG, "TX start: mode=0x%x fem=%d", tx_chip_mode, this->fem_pa_pin_ ? 1 : 0);
+  this->RadioDriver::mode_.store(RadioMode::TX, std::memory_order_release);
+  return true;
+}
+
+Sx1262TxPhaseResult Sx1262Driver::tx_wait_done_for_fsm() {
+  uint8_t irq_buf[2] = {};
+  if (!this->read_opcode_(sx1262::GET_IRQ_STATUS, irq_buf, 2)) {
+    ESP_LOGE(TAG, "TX poll: SPI failure reading IRQ status");
+    return Sx1262TxPhaseResult::Failed;
+  }
+
+  uint16_t irq_status = (static_cast<uint16_t>(irq_buf[0]) << 8) | irq_buf[1];
+  if (irq_status & sx1262::IRQ_TX_DONE) {
+    (void) this->write_opcode_(sx1262::CLR_IRQ_STATUS, irq_buf, 2);
+    if (this->tx_done_) {
+      this->tx_done_->store(false, std::memory_order_release);
+    }
+
+    uint32_t elapsed = millis() - this->tx_state_enter_time_;
+    ESP_LOGD(TAG, "TX done irq=0x%04x %ums", irq_status, elapsed);
+    return Sx1262TxPhaseResult::Succeeded;
+  }
+
+  uint32_t elapsed = millis() - this->tx_state_enter_time_;
+  if (elapsed > TX_TIMEOUT_MS) {
+    ESP_LOGE(TAG, "TX timeout after %ums (irq=0x%04x)", TX_TIMEOUT_MS, irq_status);
+    return Sx1262TxPhaseResult::Failed;
+  }
+
+  return Sx1262TxPhaseResult::Pending;
+}
+
+bool Sx1262Driver::tx_return_to_rx_for_fsm() {
+  if (this->fem_pa_pin_) {
+    this->fem_pa_pin_->digital_write(false);
+  }
+
+  this->restore_rx_packet_params_();
+  this->set_dio_irq_for_rx_();
+  this->set_rx_();
+  this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);
+  return true;
+}
+
+Sx1262TxPhaseResult Sx1262Driver::tx_wait_rx_ready_for_fsm() {
+  uint32_t elapsed = millis() - this->rx_restore_started_ms_;
+  if (elapsed < RX_SETTLE_MS) {
+    return Sx1262TxPhaseResult::Pending;
+  }
+
+  uint8_t chip_mode = this->read_chip_mode_();
+  if (chip_mode == 0x05 || chip_mode == 0x06) {
+    return Sx1262TxPhaseResult::Succeeded;
+  }
+  if (chip_mode == 0xFF) {
+    ESP_LOGW(TAG, "WaitRxReady: SPI failure reading chip mode");
+    return Sx1262TxPhaseResult::Failed;
+  }
+
+  uint8_t err_buf[2] = {};
+  if (!this->read_opcode_(sx1262::GET_DEVICE_ERRORS, err_buf, 2)) {
+    ESP_LOGW(TAG, "WaitRxReady: SPI failure reading device errors");
+    return Sx1262TxPhaseResult::Failed;
+  }
+
+  uint16_t dev_errors = (static_cast<uint16_t>(err_buf[0]) << 8) | err_buf[1];
+  constexpr uint16_t CRITICAL_ERRORS = 0x0024;  // PLL lock (bit 2) | XOSC start (bit 5)
+  if (dev_errors & CRITICAL_ERRORS) {
+    ESP_LOGW(TAG, "WaitRxReady: critical device error 0x%04x", dev_errors);
+    return Sx1262TxPhaseResult::Failed;
+  }
+
+  if (dev_errors != 0) {
+    uint8_t clear[2] = {0x00, 0x00};
+    (void) this->write_opcode_(sx1262::CLR_DEVICE_ERRORS, clear, 2);
+  }
+  if (chip_mode != 0x05) {
+    ESP_LOGD(TAG, "WaitRxReady: accepting post-SET_RX mode=0x%02x after %ums",
+             chip_mode, elapsed);
+  }
+  return Sx1262TxPhaseResult::Succeeded;
+}
+
+void Sx1262Driver::tx_on_state_enter_for_fsm(Sx1262TxState state, uint32_t now) {
+  if (state == Sx1262TxState::WaitTxDone) {
+    this->tx_state_enter_time_ = now;
+  }
+  if (state == Sx1262TxState::WaitRxReady) {
+    this->rx_restore_started_ms_ = now;
+  }
+}
+
+void Sx1262Driver::tx_set_terminal_result_for_fsm(Sx1262TxTerminalResult result) {
+  this->tx_terminal_result_ = result;
+}
+
+void Sx1262Driver::tx_recover_for_fsm() {
+  this->stat_tx_recover_.fetch_add(1, std::memory_order_relaxed);
+
+  if (this->fem_pa_pin_) {
+    this->fem_pa_pin_->digital_write(false);
+  }
+
+  (void) this->set_standby_();
+  this->clear_irq_status_();
+  if (this->rx_ready_) {
+    this->rx_ready_->store(false, std::memory_order_release);
+  }
+  if (this->tx_done_) {
+    this->tx_done_->store(false, std::memory_order_release);
+  }
+
+  this->restore_rx_packet_params_();
+  this->set_dio_irq_for_rx_();
+  this->set_rx_();
+
+  uint8_t chip_mode = this->read_chip_mode_();
+  if (chip_mode != 0x05) {
+    ESP_LOGW(TAG, "RecoverTx: direct RX restore failed (mode=0x%x), escalating", chip_mode);
+    this->recover();
+    return;
+  }
+
+  this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);
 }
 
 void Sx1262Driver::dump_config() {
