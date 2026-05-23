@@ -390,16 +390,33 @@ void Sx1262Driver::reset() {
 
 bool Sx1262Driver::load_and_transmit(const uint8_t *pkt_buf, size_t len) {
   if (!this->tx_fsm_.is_idle()) {
+    ESP_LOGW(TAG, "TX start rejected: FSM busy");
     return false;
   }
 
-  if (len == 0 || len > sizeof(this->tx_buf_)) {
+  if (pkt_buf == nullptr || len == 0 || len > sizeof(this->tx_buf_)) {
+    ESP_LOGW(TAG, "TX start rejected: invalid buffer ptr=%p len=%u", pkt_buf,
+             static_cast<unsigned>(len));
     return false;
   }
 
   memcpy(this->tx_buf_, pkt_buf, len);
   this->tx_len_ = len;
-  return this->tx_fsm_.Start(millis());
+
+  uint32_t now = millis();
+  if (!this->tx_fsm_.Start(now)) {
+    ESP_LOGW(TAG, "TX start rejected: FSM refused start");
+    return false;
+  }
+
+  // Preserve the RadioDriver contract: load_and_transmit() performs the
+  // synchronous prepare phase and returns false on immediate hardware failure.
+  this->tx_fsm_.Poll(now);
+  if (this->tx_fsm_.is_idle()) {
+    return this->tx_terminal_result_ == Sx1262TxTerminalResult::Success;
+  }
+
+  return true;
 }
 
 TxPollResult Sx1262Driver::poll_tx() {
@@ -770,7 +787,7 @@ Sx1262TxPhaseResult Sx1262Driver::tx_wait_rx_ready_for_fsm() {
   }
 
   uint8_t chip_mode = this->read_chip_mode_();
-  if (chip_mode == 0x05 || chip_mode == 0x06) {
+  if (chip_mode == 0x05) {
     return Sx1262TxPhaseResult::Succeeded;
   }
   if (chip_mode == 0xFF) {
@@ -795,11 +812,16 @@ Sx1262TxPhaseResult Sx1262Driver::tx_wait_rx_ready_for_fsm() {
     uint8_t clear[2] = {0x00, 0x00};
     (void) this->write_opcode_(sx1262::CLR_DEVICE_ERRORS, clear, 2);
   }
-  if (chip_mode != 0x05) {
-    ESP_LOGD(TAG, "WaitRxReady: accepting post-SET_RX mode=0x%02x after %ums",
-             chip_mode, elapsed);
+
+  if (elapsed <= RX_READY_TIMEOUT_MS) {
+    ESP_LOGD(TAG, "WaitRxReady: waiting for RX mode=0x%02x after %ums", chip_mode,
+             elapsed);
+    return Sx1262TxPhaseResult::Pending;
   }
-  return Sx1262TxPhaseResult::Succeeded;
+
+  ESP_LOGW(TAG, "WaitRxReady: RX restore timeout mode=0x%02x after %ums", chip_mode,
+           elapsed);
+  return Sx1262TxPhaseResult::Failed;
 }
 
 void Sx1262Driver::tx_on_state_enter_for_fsm(Sx1262TxState state, uint32_t now) {

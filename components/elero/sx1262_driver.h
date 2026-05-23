@@ -244,6 +244,7 @@ class Sx1262Driver : public RadioDriver,
 
   static constexpr uint32_t TX_TIMEOUT_MS = 50;
   static constexpr uint32_t RX_SETTLE_MS = 3;
+  static constexpr uint32_t RX_READY_TIMEOUT_MS = 25;
 
   Sx1262TxFsm tx_fsm_{*this};
   Sx1262TxTerminalResult tx_terminal_result_{Sx1262TxTerminalResult::None};
