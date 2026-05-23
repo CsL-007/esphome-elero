@@ -350,7 +350,6 @@ void Elero::rf_task_func_(void *arg) {
         case RadioHealth::STUCK:
         case RadioHealth::UNRECOVERABLE:
           self->driver_->recover();
-          self->stat_watchdog_recoveries_.fetch_add(1, std::memory_order_relaxed);
           break;
       }
     }
