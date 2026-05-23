@@ -10,4 +10,4 @@ interface StateChangedEnvelope {
    */
   'data': StateChangedData;
 }
-export type { StateChangedEnvelope };
+export { StateChangedEnvelope };

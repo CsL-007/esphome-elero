@@ -5,4 +5,4 @@
 interface ExportConfigPayload {
   'type': 'export_config';
 }
-export type { ExportConfigPayload };
+export { ExportConfigPayload };

@@ -88,4 +88,4 @@ interface RfData {
    */
   'raw': string;
 }
-export type { RfData };
+export { RfData };

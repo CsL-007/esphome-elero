@@ -24,4 +24,4 @@ interface ImportResult {
    */
   'errors': ImportError[];
 }
-export type { ImportResult };
+export { ImportResult };

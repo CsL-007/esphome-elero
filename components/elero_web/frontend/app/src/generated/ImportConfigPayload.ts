@@ -12,4 +12,4 @@ interface ImportConfigPayload {
    */
   'snapshot': ConfigSnapshot;
 }
-export type { ImportConfigPayload };
+export { ImportConfigPayload };

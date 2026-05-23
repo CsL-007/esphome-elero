@@ -31,4 +31,4 @@ interface LearnInStateData {
    */
   'programming_cmd'?: string;
 }
-export type { LearnInStateData };
+export { LearnInStateData };

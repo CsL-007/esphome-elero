@@ -6,4 +6,4 @@ interface ImportResultEventEnvelope {
    */
   'data': ImportResult;
 }
-export type { ImportResultEventEnvelope };
+export { ImportResultEventEnvelope };

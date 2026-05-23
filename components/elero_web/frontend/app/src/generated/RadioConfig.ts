@@ -18,4 +18,4 @@ interface RadioConfig {
    */
   'freq': FreqConfig;
 }
-export type { RadioConfig };
+export { RadioConfig };

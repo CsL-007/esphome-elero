@@ -9,4 +9,4 @@ interface CrudEventEnvelope {
    */
   'data': CrudEventData;
 }
-export type { CrudEventEnvelope };
+export { CrudEventEnvelope };

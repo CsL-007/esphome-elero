@@ -6,4 +6,4 @@ interface LearnInStateEventEnvelope {
    */
   'data': LearnInStateData;
 }
-export type { LearnInStateEventEnvelope };
+export { LearnInStateEventEnvelope };

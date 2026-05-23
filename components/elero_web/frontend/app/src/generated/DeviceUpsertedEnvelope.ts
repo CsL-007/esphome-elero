@@ -12,4 +12,4 @@ interface DeviceUpsertedEnvelope {
    */
   'data': DeviceUpsertedData;
 }
-export type { DeviceUpsertedEnvelope };
+export { DeviceUpsertedEnvelope };

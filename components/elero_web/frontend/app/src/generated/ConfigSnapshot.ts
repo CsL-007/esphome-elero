@@ -31,4 +31,4 @@ interface ConfigSnapshot {
    */
   'devices': DeviceSnapshot[];
 }
-export type { ConfigSnapshot };
+export { ConfigSnapshot };

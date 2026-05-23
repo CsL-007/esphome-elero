@@ -14,4 +14,4 @@ interface SnapshotExporter {
    */
   'version': string;
 }
-export type { SnapshotExporter };
+export { SnapshotExporter };

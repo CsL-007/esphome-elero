@@ -78,4 +78,4 @@ interface DeviceSnapshot {
    */
   'type2'?: string;
 }
-export type { DeviceSnapshot };
+export { DeviceSnapshot };

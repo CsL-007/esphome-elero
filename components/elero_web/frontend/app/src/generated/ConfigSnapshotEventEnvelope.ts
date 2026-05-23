@@ -7,4 +7,4 @@ interface ConfigSnapshotEventEnvelope {
    */
   'data': ConfigSnapshot;
 }
-export type { ConfigSnapshotEventEnvelope };
+export { ConfigSnapshotEventEnvelope };

@@ -3,4 +3,4 @@ interface ErrorEventEnvelope {
   'event': 'error';
   'data': ErrorData;
 }
-export type { ErrorEventEnvelope };
+export { ErrorEventEnvelope };

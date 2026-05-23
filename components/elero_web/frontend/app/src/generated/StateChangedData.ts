@@ -78,4 +78,4 @@ interface StateChangedData {
    */
   'last_seen'?: number;
 }
-export type { StateChangedData };
+export { StateChangedData };

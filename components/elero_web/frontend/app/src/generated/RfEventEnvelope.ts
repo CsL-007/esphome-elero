@@ -3,4 +3,4 @@ interface RfEventEnvelope {
   'event': 'rf';
   'data': RfData;
 }
-export type { RfEventEnvelope };
+export { RfEventEnvelope };

@@ -15,4 +15,4 @@ interface RemoveDevicePayload {
    */
   'device_type': DeviceType;
 }
-export type { RemoveDevicePayload };
+export { RemoveDevicePayload };

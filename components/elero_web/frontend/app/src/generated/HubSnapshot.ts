@@ -10,4 +10,4 @@ interface HubSnapshot {
    */
   'name_override'?: string;
 }
-export type { HubSnapshot };
+export { HubSnapshot };

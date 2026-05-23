@@ -25,4 +25,4 @@ interface ConfigData {
    */
   'remotes': RemoteConfig[];
 }
-export type { ConfigData };
+export { ConfigData };
