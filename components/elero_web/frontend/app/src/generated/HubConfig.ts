@@ -31,5 +31,12 @@ interface HubConfig {
    * @example Elero Gateway, Living Room Hub
    */
   'name': string;
+  /**
+   * Deterministic default 3-byte virtual remote/source address derived from the hub's
+   * hardware MAC address. Used as the default learn-in remote identity unless the user
+   * overrides it or restores a backup onto different hardware.
+   * @example 0xb42f01
+   */
+  'default_src_address': string;
 }
 export { HubConfig };

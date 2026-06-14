@@ -610,7 +610,7 @@ components:
     HubConfig:
       type: object
       additionalProperties: false
-      required: [device, version, mode, crud, name]
+      required: [device, version, mode, crud, name, default_src_address]
       description: Gateway identity and operating mode
       properties:
         device:
@@ -633,6 +633,13 @@ components:
             Defaults to the YAML-configured value (`elero_mqtt.device_name`); can be overridden
             at runtime and persisted to NVS via `set_hub_config`.
           examples: ["Elero Gateway", "Living Room Hub"]
+        default_src_address:
+          type: string
+          description: |
+            Deterministic default 3-byte virtual remote/source address derived from the hub's
+            hardware MAC address. Used as the default learn-in remote identity unless the user
+            overrides it or restores a backup onto different hardware.
+          examples: ["0xb42f01"]
 
     RadioConfig:
       type: object
