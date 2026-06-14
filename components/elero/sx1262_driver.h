@@ -216,17 +216,17 @@ class Sx1262Driver : public RadioDriver,
   /// Read chip_mode from GetStatus. Returns 0xFF on SPI failure.
   uint8_t read_chip_mode_();
   [[nodiscard]] bool set_standby_(uint8_t mode = sx1262::STDBY_RC);
-  void set_rx_();
-  void set_tx_();
+  [[nodiscard]] bool set_rx_();
+  [[nodiscard]] bool set_tx_();
   void configure_fsk_();
   void set_frequency_();
-  void set_pa_config_();
-  void set_dio_irq_for_rx_();
-  void set_dio_irq_for_tx_();
-  void clear_irq_status_();
-  void restore_rx_packet_params_();
-  void apply_errata_pa_clamping_();
-  void apply_errata_sensitivity_();
+  [[nodiscard]] bool set_pa_config_();
+  [[nodiscard]] bool set_dio_irq_for_rx_();
+  [[nodiscard]] bool set_dio_irq_for_tx_();
+  [[nodiscard]] bool clear_irq_status_();
+  [[nodiscard]] bool restore_rx_packet_params_();
+  [[nodiscard]] bool apply_errata_pa_clamping_();
+  [[nodiscard]] bool apply_errata_sensitivity_();
   void apply_pn9_(uint8_t *data, size_t len);
   uint32_t freq_reg_from_cc1101_regs_() const;
 
