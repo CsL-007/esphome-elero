@@ -138,13 +138,13 @@ bool Sx1262Driver::init() {
   (void) this->wait_busy_();
 
   // 13. PA config + TX params + errata fixes
-  this->set_pa_config_();
-  this->apply_errata_pa_clamping_();
+  (void) this->set_pa_config_();
+  (void) this->apply_errata_pa_clamping_();
   uint8_t tx_params[2] = {static_cast<uint8_t>(this->pa_power_), sx1262::PA_RAMP_200US};
   this->write_opcode_(sx1262::SET_TX_PARAMS, tx_params, 2);
 
   // 14. Sensitivity/modulation register fix (RadioLib fixSensitivity)
-  this->apply_errata_sensitivity_();
+  (void) this->apply_errata_sensitivity_();
 
   // 15. Current limit (OCP)
   uint8_t ocp = 0x38;  // 140mA (RadioLib default for SX1262)
@@ -155,8 +155,8 @@ bool Sx1262Driver::init() {
   this->write_register_(sx1262::REG_RX_GAIN, &rx_gain, 1);
 
   // 17. Enter RX mode
-  this->set_dio_irq_for_rx_();
-  this->set_rx_();
+  (void) this->set_dio_irq_for_rx_();
+  (void) this->set_rx_();
   (void) this->wait_busy_();
 
   // Verify init — chip should be in RX (0x05)
@@ -590,7 +590,7 @@ void Sx1262Driver::recover() {
   ESP_LOGW(TAG, "recover: soft attempt %d in current window", this->recoveries_in_window_);
   (void) this->set_standby_();
 
-  this->clear_irq_status_();
+  (void) this->clear_irq_status_();
   if (this->rx_ready_) {
     this->rx_ready_->store(false, std::memory_order_release);
   }
@@ -598,9 +598,9 @@ void Sx1262Driver::recover() {
     this->tx_done_->store(false, std::memory_order_release);
   }
 
-  this->restore_rx_packet_params_();
-  this->set_dio_irq_for_rx_();
-  this->set_rx_();
+  (void) this->restore_rx_packet_params_();
+  (void) this->set_dio_irq_for_rx_();
+  (void) this->set_rx_();
 
   // Verify: did we reach RX?
   uint8_t chip_mode = this->read_chip_mode_();
@@ -645,8 +645,8 @@ void Sx1262Driver::set_frequency_regs(uint8_t f2, uint8_t f1, uint8_t f0) {
   uint8_t cal_freq[2] = {0xD7, 0xDB};  // 850-900 MHz
   this->write_opcode_(sx1262::CALIBRATE_IMAGE, cal_freq, 2);
 
-  this->set_dio_irq_for_rx_();
-  this->set_rx_();
+  (void) this->set_dio_irq_for_rx_();
+  (void) this->set_rx_();
   ESP_LOGI(TAG, "SX1262 re-initialised: freq2=0x%02x freq1=0x%02x freq0=0x%02x", f2, f1, f0);
 }
 
@@ -684,14 +684,23 @@ bool Sx1262Driver::tx_prepare_for_fsm() {
 
   this->apply_pn9_(this->tx_buf_, tx_total);
 
-  this->set_pa_config_();
-  this->apply_errata_pa_clamping_();
+  if (!this->set_pa_config_()) {
+    ESP_LOGW(TAG, "Prepare: SET_PA_CONFIG failed");
+    return false;
+  }
+  if (!this->apply_errata_pa_clamping_()) {
+    ESP_LOGW(TAG, "Prepare: PA clamping errata write failed");
+    return false;
+  }
   uint8_t tx_params[2] = {static_cast<uint8_t>(this->pa_power_), sx1262::PA_RAMP_200US};
   if (!this->write_opcode_(sx1262::SET_TX_PARAMS, tx_params, 2)) {
     ESP_LOGW(TAG, "Prepare: SET_TX_PARAMS failed");
     return false;
   }
-  this->apply_errata_sensitivity_();
+  if (!this->apply_errata_sensitivity_()) {
+    ESP_LOGW(TAG, "Prepare: sensitivity errata write failed");
+    return false;
+  }
 
   uint8_t pkt_params[9] = {
       0x00, 0x60,
@@ -719,17 +728,29 @@ bool Sx1262Driver::tx_prepare_for_fsm() {
     return false;
   }
 
-  this->clear_irq_status_();
+  if (!this->clear_irq_status_()) {
+    ESP_LOGW(TAG, "Prepare: CLR_IRQ_STATUS failed");
+    return false;
+  }
   if (this->tx_done_) {
     this->tx_done_->store(false, std::memory_order_release);
   }
-  this->set_dio_irq_for_tx_();
+  if (!this->set_dio_irq_for_tx_()) {
+    ESP_LOGW(TAG, "Prepare: SET_DIO_IRQ_PARAMS for TX failed");
+    return false;
+  }
 
   if (this->fem_pa_pin_) {
     this->fem_pa_pin_->digital_write(true);
   }
 
-  this->set_tx_();
+  if (!this->set_tx_()) {
+    ESP_LOGW(TAG, "Prepare: SET_TX failed");
+    if (this->fem_pa_pin_) {
+      this->fem_pa_pin_->digital_write(false);
+    }
+    return false;
+  }
   uint8_t tx_chip_mode = this->read_chip_mode_();
   if (tx_chip_mode != 0xFF && tx_chip_mode != 0x06) {
     ESP_LOGD(TAG, "Prepare: transient post-SET_TX mode=0x%02x", tx_chip_mode);
@@ -773,10 +794,18 @@ bool Sx1262Driver::tx_return_to_rx_for_fsm() {
     this->fem_pa_pin_->digital_write(false);
   }
 
-  this->restore_rx_packet_params_();
-  this->set_dio_irq_for_rx_();
-  this->set_rx_();
-  this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);
+  if (!this->restore_rx_packet_params_()) {
+    ESP_LOGW(TAG, "ReturnToRx: restore RX packet params failed");
+    return false;
+  }
+  if (!this->set_dio_irq_for_rx_()) {
+    ESP_LOGW(TAG, "ReturnToRx: SET_DIO_IRQ_PARAMS for RX failed");
+    return false;
+  }
+  if (!this->set_rx_()) {
+    ESP_LOGW(TAG, "ReturnToRx: SET_RX failed");
+    return false;
+  }
   return true;
 }
 
@@ -807,7 +836,6 @@ Sx1262TxPhaseResult Sx1262Driver::tx_wait_rx_ready_for_fsm() {
     ESP_LOGW(TAG, "WaitRxReady: critical device error 0x%04x", dev_errors);
     return Sx1262TxPhaseResult::Failed;
   }
-
   if (dev_errors != 0) {
     uint8_t clear[2] = {0x00, 0x00};
     (void) this->write_opcode_(sx1262::CLR_DEVICE_ERRORS, clear, 2);
@@ -845,7 +873,7 @@ void Sx1262Driver::tx_recover_for_fsm() {
   }
 
   (void) this->set_standby_();
-  this->clear_irq_status_();
+  (void) this->clear_irq_status_();
   if (this->rx_ready_) {
     this->rx_ready_->store(false, std::memory_order_release);
   }
@@ -853,9 +881,9 @@ void Sx1262Driver::tx_recover_for_fsm() {
     this->tx_done_->store(false, std::memory_order_release);
   }
 
-  this->restore_rx_packet_params_();
-  this->set_dio_irq_for_rx_();
-  this->set_rx_();
+  (void) this->restore_rx_packet_params_();
+  (void) this->set_dio_irq_for_rx_();
+  (void) this->set_rx_();
 
   uint8_t chip_mode = this->read_chip_mode_();
   if (chip_mode != 0x05) {
@@ -985,22 +1013,27 @@ bool Sx1262Driver::set_standby_(uint8_t mode) {
   return this->write_opcode_(sx1262::SET_STANDBY, &mode, 1);
 }
 
-void Sx1262Driver::set_rx_() {
+bool Sx1262Driver::set_rx_() {
   // Re-apply boosted RX gain — this register resets to power-saving (0x94) on any
   // STDBY transition (SX1262 datasheet §9.6). Without this, sensitivity degrades ~3 dB.
   uint8_t rx_gain = 0x96;
-  this->write_register_(sx1262::REG_RX_GAIN, &rx_gain, 1);
+  if (!this->write_register_(sx1262::REG_RX_GAIN, &rx_gain, 1)) {
+    return false;
+  }
 
   // Continuous RX (timeout = 0xFFFFFF)
   uint8_t timeout[3] = {0xFF, 0xFF, 0xFF};
-  this->write_opcode_(sx1262::SET_RX, timeout, 3);
+  if (!this->write_opcode_(sx1262::SET_RX, timeout, 3)) {
+    return false;
+  }
   this->RadioDriver::mode_.store(RadioMode::RX, std::memory_order_release);
+  return true;
 }
 
-void Sx1262Driver::set_tx_() {
+bool Sx1262Driver::set_tx_() {
   // No timeout (0x000000) — we handle timeout ourselves
   uint8_t timeout[3] = {0x00, 0x00, 0x00};
-  this->write_opcode_(sx1262::SET_TX, timeout, 3);
+  return this->write_opcode_(sx1262::SET_TX, timeout, 3);
 }
 
 void Sx1262Driver::configure_fsk_() {
@@ -1083,14 +1116,14 @@ void Sx1262Driver::set_frequency_() {
   this->write_opcode_(sx1262::SET_RF_FREQUENCY, freq_buf, 4);
 }
 
-void Sx1262Driver::set_pa_config_() {
+bool Sx1262Driver::set_pa_config_() {
   // SX1262 PA config for +22 dBm max output
   // paDutyCycle=0x04, hpMax=0x07, deviceSel=0x00 (SX1262), paLut=0x01
   uint8_t pa_config[4] = {0x04, 0x07, 0x00, 0x01};
-  this->write_opcode_(sx1262::SET_PA_CONFIG, pa_config, 4);
+  return this->write_opcode_(sx1262::SET_PA_CONFIG, pa_config, 4);
 }
 
-void Sx1262Driver::set_dio_irq_for_rx_() {
+bool Sx1262Driver::set_dio_irq_for_rx_() {
   // Enable ALL useful FSK IRQs on DIO1 for debugging
   // Only RX_DONE + TIMEOUT on DIO1. Do NOT include preamble/sync — they cause
   // spurious ISR fires that race with read_fifo and eat real RX_DONE events.
@@ -1101,10 +1134,10 @@ void Sx1262Driver::set_dio_irq_for_rx_() {
       0x00, 0x00,  // DIO2 mask (none)
       0x00, 0x00,  // DIO3 mask (none)
   };
-  this->write_opcode_(sx1262::SET_DIO_IRQ_PARAMS, dio_params, 8);
+  return this->write_opcode_(sx1262::SET_DIO_IRQ_PARAMS, dio_params, 8);
 }
 
-void Sx1262Driver::set_dio_irq_for_tx_() {
+bool Sx1262Driver::set_dio_irq_for_tx_() {
   // Enable TX_DONE + TIMEOUT on DIO1
   uint16_t irq_mask = sx1262::IRQ_TX_DONE | sx1262::IRQ_TIMEOUT;
   uint8_t dio_params[8] = {
@@ -1113,44 +1146,48 @@ void Sx1262Driver::set_dio_irq_for_tx_() {
       0x00, 0x00,
       0x00, 0x00,
   };
-  this->write_opcode_(sx1262::SET_DIO_IRQ_PARAMS, dio_params, 8);
+  return this->write_opcode_(sx1262::SET_DIO_IRQ_PARAMS, dio_params, 8);
 }
 
-void Sx1262Driver::clear_irq_status_() {
+bool Sx1262Driver::clear_irq_status_() {
   uint8_t clear_all[2] = {0xFF, 0xFF};
-  this->write_opcode_(sx1262::CLR_IRQ_STATUS, clear_all, 2);
+  return this->write_opcode_(sx1262::CLR_IRQ_STATUS, clear_all, 2);
 }
 
-void Sx1262Driver::apply_errata_pa_clamping_() {
+bool Sx1262Driver::apply_errata_pa_clamping_() {
   // SX1262 errata: PA clamping circuit can reduce output power at >18 dBm.
   // RadioLib applies this in fixPaClamping() — register 0x08D8 bits [4:2].
   // For power > 18 dBm: set bits [4:2] = 0b111 to disable clamping.
   // For power <= 18 dBm: set bits [4:2] = 0b110 (default clamping OK).
   uint8_t clamp_cfg = 0;
-  this->read_register_(sx1262::REG_TX_CLAMP_CFG, &clamp_cfg, 1);
+  if (!this->read_register_(sx1262::REG_TX_CLAMP_CFG, &clamp_cfg, 1)) {
+    return false;
+  }
   if (this->pa_power_ > 18) {
     clamp_cfg |= 0x1C;                      // bits [4:2] = 111
   } else {
     clamp_cfg = (clamp_cfg & 0xE3) | 0x18;  // bits [4:2] = 110
   }
-  this->write_register_(sx1262::REG_TX_CLAMP_CFG, &clamp_cfg, 1);
+  return this->write_register_(sx1262::REG_TX_CLAMP_CFG, &clamp_cfg, 1);
 }
 
-void Sx1262Driver::apply_errata_sensitivity_() {
+bool Sx1262Driver::apply_errata_sensitivity_() {
   // SX1262 errata section 15.1: register 0x0889 bit 2 affects modulation quality.
   // RadioLib sets bit 2 = 1 for all modes except LoRa 500 kHz BW.
   // For GFSK: always set bit 2 to 1 for optimal modulation.
   uint8_t sens_cfg = 0;
-  this->read_register_(sx1262::REG_SENSITIVITY_CFG, &sens_cfg, 1);
+  if (!this->read_register_(sx1262::REG_SENSITIVITY_CFG, &sens_cfg, 1)) {
+    return false;
+  }
   sens_cfg |= 0x04;  // Set bit 2
-  this->write_register_(sx1262::REG_SENSITIVITY_CFG, &sens_cfg, 1);
+  return this->write_register_(sx1262::REG_SENSITIVITY_CFG, &sens_cfg, 1);
 }
 
 void Sx1262Driver::apply_pn9_(uint8_t *data, size_t len) {
   cc1101_pn9_whiten(data, len);
 }
 
-void Sx1262Driver::restore_rx_packet_params_() {
+bool Sx1262Driver::restore_rx_packet_params_() {
   // Must match configure_fsk_() exactly: 96-bit preamble, detector OFF, fixed len, CRC/whitening OFF
   uint8_t pkt_params[9] = {
       0x00, 0x60,  // Preamble: 96 bits (12 bytes, matches CC1101)
@@ -1162,7 +1199,7 @@ void Sx1262Driver::restore_rx_packet_params_() {
       0x01,        // CRC OFF
       0x00,        // Whitening OFF
   };
-  this->write_opcode_(sx1262::SET_PACKET_PARAMS, pkt_params, 9);
+  return this->write_opcode_(sx1262::SET_PACKET_PARAMS, pkt_params, 9);
 }
 
 uint32_t Sx1262Driver::freq_reg_from_cc1101_regs_() const {

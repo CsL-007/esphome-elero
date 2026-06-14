@@ -10,6 +10,7 @@
 /// is called once from setup() (Core 1) before the RF task starts.
 
 #include "radio_driver.h"
+#include "sx1276_tx_fsm.h"
 #include "elero_packet.h"
 #include "esphome/core/component.h"
 #include "esphome/components/spi/spi.h"
@@ -205,7 +206,8 @@ constexpr uint32_t MODE_SWITCH_TIMEOUT_MS = 10;
 /// All SPI operations are encapsulated here — the Elero hub never touches hardware.
 class Sx1276Driver : public RadioDriver,
                      public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_POLARITY_LOW,
-                                           spi::CLOCK_PHASE_LEADING, spi::DATA_RATE_8MHZ> {
+                                           spi::CLOCK_PHASE_LEADING, spi::DATA_RATE_8MHZ>,
+                     public Sx1276TxFsmOwner {
  public:
   // ── RadioDriver interface ──────────────────────────────────────────────────
 
@@ -277,13 +279,28 @@ class Sx1276Driver : public RadioDriver,
 
   uint32_t freq_reg_from_cc1101_regs_() const;
 
+  // ── Sx1276TxFsmOwner hooks ────────────────────────────────────────────────
+
+  bool tx_prepare_for_fsm() override;
+  Sx1276TxPhaseResult tx_wait_done_for_fsm() override;
+  bool tx_return_to_rx_for_fsm() override;
+  Sx1276TxPhaseResult tx_wait_rx_ready_for_fsm() override;
+  void tx_on_state_enter_for_fsm(Sx1276TxState state, uint32_t now) override;
+  void tx_set_terminal_result_for_fsm(Sx1276TxTerminalResult result) override;
+  void tx_recover_for_fsm() override;
+
   // ── TX state ───────────────────────────────────────────────────────────────
 
-  bool tx_in_progress_{false};
-  uint32_t tx_start_ms_{0};
-  bool tx_pending_success_{false};
-
   static constexpr uint32_t TX_TIMEOUT_MS = 50;
+  static constexpr uint32_t RX_SETTLE_MS = 3;
+  static constexpr uint32_t RX_READY_TIMEOUT_MS = 25;
+
+  Sx1276TxFsm tx_fsm_{*this};
+  Sx1276TxTerminalResult tx_terminal_result_{Sx1276TxTerminalResult::None};
+  uint32_t tx_state_enter_time_{0};
+  uint32_t rx_restore_started_ms_{0};
+  uint8_t tx_buf_[sx1276::FIFO_SIZE]{};
+  size_t tx_len_{0};
 
   // ── Frequency registers (CC1101 format for compatibility) ──────────────────
 
