@@ -1,5 +1,7 @@
 # esphome-elero
 
+> **Note:** This is a fork of [manuschillerdev/esphome-elero](https://github.com/manuschillerdev/esphome-elero), modified with the help of AI to compile against the current ESPHome version (2026.x). The upstream project targets an older ESPHome API.
+
 ESPHome component for controlling Elero wireless blinds and lights via an ESP32 with a CC1101, SX1262, or SX1276 868 MHz RF transceiver. Bidirectional -- sends commands and receives status feedback.
 
 [![ESPHome](https://img.shields.io/badge/ESPHome-Component-blue)](https://esphome.io/)
