@@ -145,7 +145,6 @@ elero:
 
 # Web UI for device discovery
 web_server_base:
-  port: 80
 
 elero_web:
 ```
@@ -270,7 +269,6 @@ elero_nvs:        # ESPHome native API + NVS device persistence
 
 # ── Web UI (device CRUD, RF discovery, backup/restore) ──
 web_server_base:
-  port: 80
 
 elero_web:
 ```
