@@ -1,8 +1,11 @@
 /// @file app_register_helper.h
 /// @brief Workaround for ESPHome 2026.x protected Application::register_component_().
 ///
-/// Uses the Kolb/Alexandrescu "access to private/protected members" trick via
-/// explicit template instantiation + friend injection. Fully standards-compliant.
+/// Uses the canonical "litb" access trick: access control is NOT applied to
+/// template arguments of explicit instantiations ([temp.spec] / [class.access]),
+/// so the explicit instantiation below may name the protected member. The
+/// injected friend function is then found via ADL on the tag type — the
+/// protected member is never named outside the exempt context.
 
 #pragma once
 #include "esphome/core/application.h"
@@ -13,27 +16,20 @@ namespace esphome {
 namespace elero {
 namespace detail {
 
-typedef void (Application::*RegisterImplFn)(Component *, bool);
-
-// Robber: explicit instantiation with fn injects the friend definition
-template<RegisterImplFn Fn>
-struct AppRegisterRobber {
-  friend RegisterImplFn stolen_register_impl_fn(AppRegisterRobber<Fn>) { return Fn; }
+// Tag describing the stolen member; friend is injected by Rob's instantiation.
+struct RegImplTag {
+  typedef void (Application::*type)(Component *, bool);
+  friend type get_stolen_fn(RegImplTag);  // defined by friend injection below
 };
 
-// ADL lookup helper
-struct AppRegisterRobberTag {};
+template<typename Tag, typename Tag::type M>
+struct Rob {
+  friend typename Tag::type get_stolen_fn(Tag) { return M; }
+};
 
-// Explicit instantiation — triggers friend injection for register_component_impl_
-// Only done once (in this header, guarded by include guards / ODR).
-#ifndef ELERO_APP_REGISTER_ROBBER_INSTANTIATED
-#define ELERO_APP_REGISTER_ROBBER_INSTANTIATED
-template struct AppRegisterRobber<&Application::register_component_impl_>;
-#endif
-
-inline RegisterImplFn get_register_impl_fn() {
-  return stolen_register_impl_fn(AppRegisterRobber<&Application::register_component_impl_>{});
-}
+// Explicit instantiation — the ONLY place the protected member is named.
+// Access checking does not apply here per the C++ standard.
+template struct Rob<RegImplTag, &Application::register_component_impl_>;
 
 }  // namespace detail
 
@@ -43,7 +39,7 @@ template<typename T>
 inline void app_register_component(T *comp) {
   constexpr bool has_loop =
       !std::is_same<decltype(&T::loop), decltype(&Component::loop)>::value;
-  (App.*(detail::get_register_impl_fn()))(comp, has_loop);
+  (App.*get_stolen_fn(detail::RegImplTag{}))(comp, has_loop);
 }
 
 }  // namespace elero
