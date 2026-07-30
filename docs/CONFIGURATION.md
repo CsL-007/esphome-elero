@@ -146,7 +146,6 @@ Web interface for device CRUD, RF discovery, backup/restore, and live RF/log tai
 # web_server_base is automatically loaded by elero_web.
 # Declare it explicitly to configure the port:
 web_server_base:
-  port: 80
 
 elero_web:
 ```
