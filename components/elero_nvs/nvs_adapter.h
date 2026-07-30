@@ -68,13 +68,13 @@ class NvsAdapter : public Component, public OutputAdapter {
  private:
   void create_cover_(Device *dev, size_t slot_index) {
     auto *shell = new EspCoverShell();  // NOLINT — owned by App
-    shell->set_name(dev->config.name);
+    shell->set_object_id(dev->config.name);
     shell->set_registry(registry_);
     shell->set_device(dev);
 
     cover_shells_[slot_index] = shell;
     App.register_cover(shell);
-    App.register_component(shell);
+    App.register_component_(shell);
   }
 
   void create_light_(Device *dev, size_t slot_index) {
@@ -83,15 +83,15 @@ class NvsAdapter : public Component, public OutputAdapter {
     output->set_device(dev);
 
     auto *state = new light::LightState(output);  // NOLINT — owned by App
-    state->set_name(dev->config.name);
+    state->set_object_id(dev->config.name);
     state->set_restore_mode(light::LIGHT_RESTORE_DEFAULT_OFF);
 
     output->set_light_state(state);
 
     light_shells_[slot_index] = output;
     App.register_light(state);
-    App.register_component(state);
-    App.register_component(output);
+    App.register_component_(state);
+    App.register_component_(output);
   }
 
   DeviceRegistry *registry_{nullptr};
