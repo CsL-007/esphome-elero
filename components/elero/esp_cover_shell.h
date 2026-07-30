@@ -56,6 +56,9 @@ class EspCoverShell : public cover::Cover, public Component {
   void set_refresh_button(RefreshButton *b) { refresh_button_ = b; }
 #endif
 
+  // ── Self-registration (called by NvsAdapter before App.setup()) ──
+  void register_self() { App.register_component_(this); }
+
   // ── ESPHome Component lifecycle ────────────────────────────
   void setup() override {
 #ifdef USE_BUTTON
