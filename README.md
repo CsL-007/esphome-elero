@@ -24,7 +24,7 @@ Devices always live in NVS and are managed at runtime through the web UI. The ad
 
 ```yaml
 external_components:
-  - source: github://manuschillerdev/esphome-elero
+  - source: github://pmisak/esphome-elero
 
 # ... board + SPI + elero config from your device page ...
 
@@ -37,7 +37,7 @@ elero_web:
 
 ```yaml
 external_components:
-  - source: github://manuschillerdev/esphome-elero
+  - source: github://pmisak/esphome-elero
 
 # ... board + SPI + elero config from your device page ...
 

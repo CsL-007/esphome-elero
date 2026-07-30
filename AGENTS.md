@@ -6,7 +6,7 @@
 
 ```yaml
 external_components:
-  - source: github://manuschillerdev/esphome-elero
+  - source: github://pmisak/esphome-elero
 ```
 
 ## Pi Skills (use them)

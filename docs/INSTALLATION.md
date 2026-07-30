@@ -130,7 +130,7 @@ ota:
 
 # External Elero component
 external_components:
-  - source: github://manuschillerdev/esphome-elero
+  - source: github://pmisak/esphome-elero
 
 # SPI bus
 spi:
@@ -250,7 +250,7 @@ ota:
     password: !secret ota_password
 
 external_components:
-  - source: github://manuschillerdev/esphome-elero
+  - source: github://pmisak/esphome-elero
 
 spi:
   clk_pin: GPIO18
