@@ -47,12 +47,6 @@ class EspLightShell : public light::LightOutput, public Component {
   void set_refresh_button(RefreshButton *b) { refresh_button_ = b; }
 #endif
 
-  // ── Self-registration (called by NvsAdapter before App.setup()) ──
-  void register_self() {
-    App.register_component_(this);
-    if (light_state_ != nullptr)
-      App.register_component_(light_state_);
-  }
 
   // ── ESPHome Component lifecycle ────────────────────────────
   void setup() override {

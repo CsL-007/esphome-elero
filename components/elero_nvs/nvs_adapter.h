@@ -16,6 +16,7 @@
 #include "../elero/esp_light_shell.h"
 #include "../elero/output_adapter.h"
 #include "esphome/components/light/light_state.h"
+#include "app_register_helper.h"
 #include <array>
 
 namespace esphome {
@@ -73,7 +74,7 @@ class NvsAdapter : public Component, public OutputAdapter {
 
     cover_shells_[slot_index] = shell;
     App.register_cover(shell, dev->config.name, 0, 0);  // sets name + push_back
-    shell->register_self();  // register as Component (friend access)
+    app_register_component(shell);  // register as Component
   }
 
   void create_light_(Device *dev, size_t slot_index) {
@@ -88,7 +89,8 @@ class NvsAdapter : public Component, public OutputAdapter {
 
     light_shells_[slot_index] = output;
     App.register_light(state, dev->config.name, 0, 0);  // sets name + push_back
-    output->register_self();  // registers output + state as Components (friend access)
+    app_register_component(output);  // register LightOutput as Component
+    app_register_component(state);   // register LightState as Component
   }
 
   DeviceRegistry *registry_{nullptr};
