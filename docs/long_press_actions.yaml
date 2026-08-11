@@ -1,0 +1,43 @@
+# Elero long-press actions for Home Assistant via ESPHome native API.
+#
+# Prerequisite: give the Elero registry an explicit ID in the device YAML:
+#
+# elero:
+#   id: elero_hub
+#   registry_id: elero_registry
+#
+# Include this fragment in that ESPHome device YAML (for example via packages:).
+# The `address` value is the saved device's Elero destination address.
+#
+# Home Assistant calls:
+#   action: esphome.<node_name>_elero_long_up
+#   data:
+#     address: 0x123456
+#
+#   action: esphome.<node_name>_elero_long_down
+#   data:
+#     address: 0x123456
+
+api:
+  actions:
+    - action: elero_long_up
+      variables:
+        address: int
+      then:
+        - lambda: |-
+            if (!id(elero_registry).command_raw_button(
+                    static_cast<uint32_t>(address), 0x21)) {
+              ESP_LOGW("elero.api", "Failed to queue long-up for 0x%06X",
+                       static_cast<uint32_t>(address));
+            }
+
+    - action: elero_long_down
+      variables:
+        address: int
+      then:
+        - lambda: |-
+            if (!id(elero_registry).command_raw_button(
+                    static_cast<uint32_t>(address), 0x41)) {
+              ESP_LOGW("elero.api", "Failed to queue long-down for 0x%06X",
+                       static_cast<uint32_t>(address));
+            }
