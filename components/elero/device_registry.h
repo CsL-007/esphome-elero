@@ -124,6 +124,10 @@ class DeviceRegistry {
     /// Enqueues a single CHECK packet — blind responds with current state.
     void request_check(Device &dev);
 
+    /// Queue a raw Elero 0x44 BUTTON command for a saved cover or light.
+    /// address is the device's NvsDeviceConfig::dst_address.
+    [[nodiscard]] bool command_raw_button(uint32_t address, uint8_t cmd_byte);
+
     // ═════════════════════════════════════════════════════════════════════════
     // RF DISPATCH
     // ═════════════════════════════════════════════════════════════════════════
