@@ -650,6 +650,28 @@ void DeviceRegistry::request_check(Device &dev) {
     }
 }
 
+bool DeviceRegistry::command_raw_button(uint32_t address, uint8_t cmd_byte) {
+    Device *dev = find(address);
+
+    if (dev == nullptr) {
+        ESP_LOGW(TAG, "raw button: device 0x%06x was not found", address);
+        return false;
+    }
+
+    if (dev->is_remote()) {
+        ESP_LOGW(TAG, "raw button: device 0x%06x is a remote, not a TX target", address);
+        return false;
+    }
+
+    if (!dev->config.is_enabled()) {
+        ESP_LOGW(TAG, "raw button: device 0x%06x is disabled", address);
+        return false;
+    }
+
+    return enqueue_or_warn_(*dev, cmd_byte, packet::button::PACKETS,
+                            packet::msg_type::BUTTON, "raw button");
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // RF DISPATCH
 // ═════════════════════════════════════════════════════════════════════════════
