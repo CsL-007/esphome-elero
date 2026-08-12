@@ -5,7 +5,7 @@ from esphome.core import CORE
 from ..elero import CONF_ELERO_ID, CONF_REGISTRY_ID, DeviceRegistry, OutputAdapter, elero_ns
 
 DEPENDENCIES = ["elero"]
-AUTO_LOAD = ["json", "cover", "light"]
+AUTO_LOAD = ["json", "cover", "light", "api"]
 CODEOWNERS = ["@manuschillerdev"]
 
 NvsAdapter = elero_ns.class_("NvsAdapter", cg.Component, OutputAdapter)
@@ -24,18 +24,11 @@ CONFIG_SCHEMA = cv.Schema(
 async def to_code(config):
     registry = await cg.get_variable(config[CONF_REGISTRY_ID])
 
-    # Enable NVS persistence on the unified device registry.
     cg.add(registry.set_nvs_enabled(True))
 
-    # If elero_mqtt is loaded, it handles entity publishing via MQTT discovery.
-    # Otherwise, create an NVS adapter that builds ESPHome entities from NVS at boot.
     if "elero_mqtt" not in CORE.loaded_integrations:
         cg.add(registry.set_hub_mode(cg.RawExpression("elero::HubMode::NATIVE")))
 
-        # Ensure cover/light framework is enabled — ESPHome normally sets these
-        # defines when it sees a `cover:`/`light:` block in YAML, but here entities
-        # are created at runtime from NVS. Counts are pre-sized to MAX_DEVICES
-        # since the actual count isn't known at codegen.
         cg.add_define("USE_COVER")
         cg.add_define("USE_LIGHT")
         cg.add_define("ESPHOME_ENTITY_COVER_COUNT", 48)
