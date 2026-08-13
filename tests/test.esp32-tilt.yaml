@@ -1,0 +1,33 @@
+esphome:
+  name: test-tilt
+  platform: ESP32
+  board: esp32dev
+
+external_components:
+  - source: .
+
+elero:
+  hub_name: test-hub
+
+elero_nvs:
+  enabled: true
+
+# This config is a compile-time validation that the EspCoverShell native API
+# code paths (including tilt support) compile when the component is included.
+# It does not attempt to exercise runtime hardware in CI; it's a lightweight
+# compile target mirroring other tests in tests/*.yaml.
+
+wifi:
+  ssid: "test"
+  password: "test"
+
+# Minimal logging to reduce compile/test noise
+logger:
+  level: WARN
+
+ota:
+  password: "test"
+
+auth:
+  username: "user"
+  password: "pass"

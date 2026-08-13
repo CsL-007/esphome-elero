@@ -106,7 +106,20 @@ class EspCoverShell : public cover::Cover, public Component {
     }
 
     if (call.get_tilt().has_value()) {
-      registry_->command_cover_tilt(*device_);
+      float tilt_val = *call.get_tilt();
+      // Map HA tilt-open to the existing generic TILT command.
+      if (tilt_val >= cover_sm::POSITION_OPEN) {
+        registry_->command_cover_tilt(*device_);
+      }
+      // Map HA tilt-close only via the raw button 0x41 path (button-type packet).
+      // This uses the normal CommandSender queue (command_raw_button) so it
+      // follows the same TX scheduling and retries as other button packets.
+      else if (tilt_val <= cover_sm::POSITION_CLOSED) {
+        (void) registry_->command_raw_button(device_->config.dst_address, 0x41);
+      } else {
+        // For intermediate tilt values, fall back to the generic TILT command.
+        registry_->command_cover_tilt(*device_);
+      }
       return;
     }
 
